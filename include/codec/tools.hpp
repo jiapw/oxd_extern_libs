@@ -13,6 +13,10 @@ public:
     {
         return cppcodec::base64_rfc4648::encode(s.data(), s.size());
     }
+    static std::string<uint8_t> Decode(std::string_view s)
+    {
+        return cppcodec::base64_rfc4648::decode(s.data(), s.size());
+    }
     static std::vector<uint8_t> Decode(std::string_view s)
     {
         return cppcodec::base64_rfc4648::decode(s.data(), s.size());

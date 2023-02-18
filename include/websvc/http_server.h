@@ -1,9 +1,6 @@
 #pragma once
 
-#pragma comment(lib, "libcrypto.lib")
-#pragma comment(lib, "libssl.lib")
-
-#include "sws/server_https.hpp"
+#include "simple-web-server/server_https.hpp"
 
 namespace websvc {
 

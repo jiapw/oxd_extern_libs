@@ -2,6 +2,7 @@
 
 #include <string>
 #include <utility>
+#include <optional>
 
 #include <openssl/conf.h>
 #include <openssl/pem.h>
@@ -214,8 +215,19 @@ Result GenerateCertificatePrivateKeyPair(CertSuit& out)
 
 inline std::string ContentTypeEnumToString(ContentType content_type)
 {
+    switch (content_type) {
+        case CT_PLAIN_TEXT:
+            return "text/plain";
+        case CT_JSON:
+            return "application/json";
+        case CT_WEBP:
+            return "image/webp";
+        case CT_BINARY:
+            return "application/octet-stream";
+        default:
+            return "text/plain";
+    }
     _ASSERT(0);
-    return "";
 }
 
 /*
@@ -278,5 +290,111 @@ struct HttpServerConfig {
     uint16_t port;
     size_t thread_pool_size;
 };
+
+class WebSocketConnection {
+public:
+    virtual Result Send(const std::string& message) = 0;
+};
+
+using WebSocketMessageHandler = std::function<void(WebSocketConnection&, const std::string&)>;
+using WebSocketOpenHandler = std::function<void(WebSocketConnection&)>;
+using WebSocketCloseHandler = std::function<void(WebSocketConnection&, int, const std::string&)>;
+using WebSocketErrorHandler = std::function<void(WebSocketConnection&, const std::error_code&)>;
+using WebSocketPingHandler = std::function<void(WebSocketConnection&)>;
+using WebSocketPongHandler = std::function<void(WebSocketConnection&)>;
+
+class WebSocketEndpoint {
+public:
+    void OnMessage(WebSocketConnection& connection, const std::string& in_message) const
+    {
+        if (message_handler_.has_value()) {
+            const WebSocketMessageHandler& message_handler = message_handler_.value();
+            message_handler(connection, in_message);
+        }
+    }
+
+    void OnOpen(WebSocketConnection& connection) const
+    {
+        if (open_handler_.has_value()) {
+            const WebSocketOpenHandler& open_handler = open_handler_.value();
+            open_handler(connection);
+        }
+    }
+
+    void OnClose(WebSocketConnection& connection, int status_code, const std::string& reason) const
+    {
+        if (close_handler_.has_value()) {
+            const WebSocketCloseHandler& close_handler = close_handler_.value();
+            close_handler(connection, status_code, reason);
+        }
+    }
+
+    void OnError(WebSocketConnection& connection, const std::error_code& error_code) const
+    {
+        if (error_handler_.has_value()) {
+            const WebSocketErrorHandler& error_handler = error_handler_.value();
+            error_handler(connection, error_code);
+        }
+    }
+
+    void OnPing(WebSocketConnection& connection) const
+    {
+        if (ping_handler_.has_value()) {
+            const WebSocketPingHandler& ping_handler = ping_handler_.value();
+            ping_handler(connection);
+        }
+    }
+
+    void OnPong(WebSocketConnection& connection) const
+    {
+        if (pong_handler_.has_value()) {
+            const WebSocketPongHandler& pong_handler = pong_handler_.value();
+            pong_handler(connection);
+        }
+    }
+
+public:
+    const std::optional<WebSocketMessageHandler>& message_handler() const { return message_handler_; }
+    void set_message_handler(const WebSocketMessageHandler& message_handler) { message_handler_ = message_handler; }
+
+    const std::optional<WebSocketOpenHandler>& open_handler() const { return open_handler_; }
+    void set_open_handler(const WebSocketOpenHandler& open_handler) { open_handler_ = open_handler; }
+
+    const std::optional<WebSocketCloseHandler>& close_handler() const { return close_handler_; }
+    void set_close_handler(const WebSocketCloseHandler& close_handler) { close_handler_ = close_handler; }
+
+    const std::optional<WebSocketErrorHandler>& error_handler() const { return error_handler_; }
+    void set_error_handler(const WebSocketErrorHandler& error_handler) { error_handler_ = error_handler; }
+
+    const std::optional<WebSocketPingHandler>& ping_handler() const { return ping_handler_; }
+    void set_ping_handler(const WebSocketPingHandler& ping_handler) { ping_handler_ = ping_handler; }
+
+    const std::optional<WebSocketPingHandler>& pong_handler() const { return pong_handler_; }
+    void set_pong_handler(const WebSocketPongHandler& pong_handler) { pong_handler_ = pong_handler; }
+
+private:
+    std::optional<WebSocketMessageHandler> message_handler_;
+    std::optional<WebSocketOpenHandler> open_handler_;
+    std::optional<WebSocketCloseHandler> close_handler_;
+    std::optional<WebSocketErrorHandler> error_handler_;
+    std::optional<WebSocketPingHandler> ping_handler_;
+    std::optional<WebSocketPingHandler> pong_handler_;
+    // TODO: add interface for handshake.
+};
+
+using WebSocketServerStartCallback = std::function<void(unsigned short /*port*/)>;
+
+class WebSocketServer {
+public:
+    virtual Result RegisteEndpoint(const std::string& path, std::shared_ptr<WebSocketEndpoint> endpoint) = 0;
+    virtual Result Start(const WebSocketServerStartCallback& callback = nullptr) = 0;
+    virtual Result Stop() = 0;
+};
+
+struct WebSocketServerConfig {
+    uint16_t port;
+    size_t thread_pool_size;
+};
+
 
 } // namespace websvc

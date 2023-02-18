@@ -8,72 +8,115 @@
 
 #include "base.h"
 
+#include "simple-web-server/server_wss.hpp"
+
 namespace websvc {
 
-class WebSocketConnection {
+class SwsWebSocketServerConnection : public WebSocketConnection {
 public:
-    virtual Result Send(const std::string& message) = 0;
-};
-
-using WebSocketMessageHandler = std::function<void(WebSocketConnection&, const std::string&)>;
-using WebSocketOpenHandler = std::function<void(WebSocketConnection&)>;
-using WebSocketCloseHandler = std::function<void(WebSocketConnection&, int, const std::string&)>;
-using WebSocketErrorHandler = std::function<void(WebSocketConnection&, const std::error_code&)>;
-using WebSocketPingHandler = std::function<void(WebSocketConnection&)>;
-using WebSocketPongHandler = std::function<void(WebSocketConnection&)>;
-
-class WebSocketEndpoint {
-public:
-    void OnMessage(WebSocketConnection& connection, const std::string& in_message) const;
-    void OnOpen(WebSocketConnection& connection) const;
-    void OnClose(WebSocketConnection& connection, int status_code, const std::string& reason) const;
-    void OnError(WebSocketConnection& connection, const std::error_code& error_code) const;
-    void OnPing(WebSocketConnection& connection) const;
-    void OnPong(WebSocketConnection& connection) const;
+    using server_impl_type = SimpleWeb::SocketServer<SimpleWeb::WSS>;
+    using connection_impl_type = server_impl_type::Connection;
 
 public:
-    const std::optional<WebSocketMessageHandler>& message_handler() const { return message_handler_; }
-    void set_message_handler(const WebSocketMessageHandler& message_handler) { message_handler_ = message_handler; }
+    Result Send(const std::string& message) override
+    {
+        connection_->send(message);
+        return Result::SS_OK;
+    }
 
-    const std::optional<WebSocketOpenHandler>& open_handler() const { return open_handler_; }
-    void set_open_handler(const WebSocketOpenHandler& open_handler) { open_handler_ = open_handler; }
-
-    const std::optional<WebSocketCloseHandler>& close_handler() const { return close_handler_; }
-    void set_close_handler(const WebSocketCloseHandler& close_handler) { close_handler_ = close_handler; }
-
-    const std::optional<WebSocketErrorHandler>& error_handler() const { return error_handler_; }
-    void set_error_handler(const WebSocketErrorHandler& error_handler) { error_handler_ = error_handler; }
-
-    const std::optional<WebSocketPingHandler>& ping_handler() const { return ping_handler_; }
-    void set_ping_handler(const WebSocketPingHandler& ping_handler) { ping_handler_ = ping_handler; }
-
-    const std::optional<WebSocketPingHandler>& pong_handler() const { return pong_handler_; }
-    void set_pong_handler(const WebSocketPongHandler& pong_handler) { pong_handler_ = pong_handler; }
+public:
+    explicit SwsWebSocketServerConnection(std::shared_ptr<connection_impl_type> connection)
+        : connection_(connection)
+    {
+    }
+    ~SwsWebSocketServerConnection() = default;
 
 private:
-    std::optional<WebSocketMessageHandler> message_handler_;
-    std::optional<WebSocketOpenHandler> open_handler_;
-    std::optional<WebSocketCloseHandler> close_handler_;
-    std::optional<WebSocketErrorHandler> error_handler_;
-    std::optional<WebSocketPingHandler> ping_handler_;
-    std::optional<WebSocketPingHandler> pong_handler_;
-    // TODO: add interface for handshake.
+    std::shared_ptr<connection_impl_type> connection_;
 };
 
-using WebSocketServerStartCallback = std::function<void(unsigned short /*port*/)>;
-
-class WebSocketServer {
+class SwsWebSocketServer : public WebSocketServer {
 public:
-    virtual Result RegisteEndpoint(const std::string& path, std::shared_ptr<WebSocketEndpoint> endpoint) = 0;
-    virtual Result Start(const WebSocketServerStartCallback& callback = nullptr) = 0;
-    virtual Result Stop() = 0;
+    using server_impl_type = SimpleWeb::SocketServer<SimpleWeb::WSS>;
+    using connection_impl_type = server_impl_type::Connection;
+    using in_message_impl_type = server_impl_type::InMessage;
+    using endpoint_impl_type = server_impl_type::Endpoint;
+
+public:
+    Result RegisteEndpoint(const std::string& path, std::shared_ptr<WebSocketEndpoint> endpoint) override
+    {
+        if (!endpoint)
+            return Result::ERR_FAIL;
+
+        endpoint_impl_type& endpoint_impl = server_ptr_->endpoint[path];
+
+        endpoint_impl.on_message = [endpoint](std::shared_ptr<connection_impl_type> connection_impl, std::shared_ptr<in_message_impl_type> in_message_impl) {
+            std::string in_message_string = in_message_impl->string();
+
+            SwsWebSocketServerConnection connection(connection_impl);
+            std::string in_message = in_message_impl->string();
+            endpoint->OnMessage(connection, in_message);
+        };
+
+        endpoint_impl.on_open = [endpoint](std::shared_ptr<connection_impl_type> connection_impl) {
+            SwsWebSocketServerConnection connection(connection_impl);
+            endpoint->OnOpen(connection);
+        };
+
+        endpoint_impl.on_close = [endpoint](std::shared_ptr<connection_impl_type> connection_impl, int status_code, const std::string& reason) {
+            SwsWebSocketServerConnection connection(connection_impl);
+            endpoint->OnClose(connection, status_code, reason);
+        };
+
+        endpoint_impl.on_error = [endpoint](std::shared_ptr<connection_impl_type> connection_impl, const std::error_code& error_code) {
+            SwsWebSocketServerConnection connection(connection_impl);
+            endpoint->OnError(connection, error_code);
+        };
+
+        endpoint_impl.on_ping = [endpoint](std::shared_ptr<connection_impl_type> connection_impl) {
+            SwsWebSocketServerConnection connection(connection_impl);
+            endpoint->OnPing(connection);
+        };
+
+        endpoint_impl.on_pong = [endpoint](std::shared_ptr<connection_impl_type> connection_impl) {
+            SwsWebSocketServerConnection connection(connection_impl);
+            endpoint->OnPong(connection);
+        };
+
+        return Result::SS_OK;
+    }
+
+    Result Start(const WebSocketServerStartCallback& callback = nullptr) override
+    {
+        server_ptr_->start(callback);
+        return Result::SS_OK;
+    }
+
+    Result Stop() override
+    {
+        server_ptr_->stop();
+        return Result::SS_OK;
+    }
+
+public:
+    explicit SwsWebSocketServer(const WebSocketServerConfig& config)
+        : server_ptr_(nullptr)
+    {
+        CertSuit cst;
+        auto r = GenerateCertificatePrivateKeyPair(cst);
+        asio::const_buffer cert(cst.certificate.c_str(), cst.certificate.size());
+        asio::const_buffer pkey(cst.private_key.c_str(), cst.private_key.size());
+        server_ptr_ = std::make_shared<server_impl_type>(cert, pkey);
+
+        server_ptr_->config.port = config.port;
+        server_ptr_->config.thread_pool_size = config.thread_pool_size;
+    }
+
+    ~SwsWebSocketServer() = default;
+
+private:
+    std::shared_ptr<server_impl_type> server_ptr_;
 };
 
-struct WebSocketServerConfig {
-    uint16_t port;
-    size_t thread_pool_size;
-};
-
-std::shared_ptr<WebSocketServer> CreateWebSocketServer(const WebSocketServerConfig& config);
 
 } // namespace websvc
