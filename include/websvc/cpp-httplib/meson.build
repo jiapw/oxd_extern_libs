@@ -30,10 +30,17 @@ endif
 deps = [dependency('threads')]
 args = []
 
-openssl_dep = dependency('openssl', version: '>=1.1.1', required: get_option('cpp-httplib_openssl'))
+openssl_dep = dependency('openssl', version: '>=3.0.0', required: get_option('cpp-httplib_openssl'))
 if openssl_dep.found()
   deps += openssl_dep
   args += '-DCPPHTTPLIB_OPENSSL_SUPPORT'
+  if host_machine.system() == 'darwin'
+    macosx_keychain_dep = dependency('appleframeworks', modules: ['CoreFoundation', 'Security'], required: get_option('cpp-httplib_macosx_keychain'))
+    if macosx_keychain_dep.found()
+        deps += macosx_keychain_dep
+        args += '-DCPPHTTPLIB_USE_CERTS_FROM_MACOSX_KEYCHAIN'
+    endif  
+  endif
 endif
 
 zlib_dep = dependency('zlib', required: get_option('cpp-httplib_zlib'))
