@@ -36,6 +36,19 @@ namespace simple {
 
 			auto& v = this->operator[](key);
 
+			static_assert( 
+				(
+					std::is_same_v<T, bool> ||
+					std::is_same_v<T, int64_t> ||
+					std::is_same_v<T, uint64_t> ||
+					std::is_same_v<T, float> ||
+					std::is_same_v<T, std::string> ||
+					std::is_same_v<T, nlohmann::json> || 
+					std::is_same_v<T, simple::json>
+				),
+				"unsupported value type!"
+			);
+
 			if constexpr(std::is_same_v<T, std::string>)
 			{
 				if (!v.is_string())
@@ -65,10 +78,6 @@ namespace simple {
 			{
 				if (!v.is_object())
 					return false;
-			}
-			else
-			{
-				static_assert(false, "unsupported value type!");
 			}
 
 			out = v;
