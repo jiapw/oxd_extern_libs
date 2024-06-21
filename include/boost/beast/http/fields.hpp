@@ -63,7 +63,7 @@ class basic_fields
     friend class fields_test; // for `header`
 #endif
 
-    struct element;
+    // struct element;
 
     using off_t = std::uint16_t;
 
