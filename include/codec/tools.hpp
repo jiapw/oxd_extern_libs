@@ -34,6 +34,12 @@ public:
         return _RealCodec::decode<std::string>(s.data(), s.size());
     }
 
+    static bool Encode(const std::string& s, std::string& out)
+    {
+        _RealCodec::encode(out, s.data(), s.size());
+        return true;
+    }
+
     static std::string Encode(const void* p, size_t len_by_byte)
     {
         return _RealCodec::encode((const char *)p, len_by_byte);
