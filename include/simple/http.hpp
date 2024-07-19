@@ -343,7 +343,7 @@ bool fail(char const* message, char const* what)
 
 struct http_request: public std::enable_shared_from_this<http_request>
 {
-	bool finished = false;
+	bool ended = false;
 
 	int version = 11; // http 1.1
 	
@@ -352,15 +352,17 @@ struct http_request: public std::enable_shared_from_this<http_request>
 	http::request<http::empty_body> req;
 	http::response<http::string_body> res;
 
-	beast::error_code ec;
+	beast::flat_buffer buffer;
 
-	operator std::shared_ptr<http_request>() {
-		return shared_from_this();
-	}
+	beast::error_code error_code;
 
 	http_request(const std::string& url)
 	{
 		config(url);
+	}
+	~http_request()
+	{
+		return;
 	}
 	bool config(const std::string& s)
 	{
@@ -381,6 +383,18 @@ struct http_request: public std::enable_shared_from_this<http_request>
 
 		return true;
 	}
+
+	void end_in_failure(const beast::error_code ec, const std::string& info)
+	{
+		ended = true;
+		error_code = ec;
+		return fail(ec, info.c_str());
+	}
+
+	void end_in_success()
+	{
+		ended = true;
+	}
 };
 
 struct http_client : public std::enable_shared_from_this<http_client>
@@ -396,29 +410,33 @@ struct http_client : public std::enable_shared_from_this<http_client>
 
 	{
 	}
+	~http_client()
+	{
+		return;
+	}
 
 	void execute(std::shared_ptr<http_request> req)
 	{
 		request = req;
 
 		// Set SNI Hostname (many hosts need this to handshake successfully)
-		if (!SSL_set_tlsext_host_name(ssl_stream.native_handle(), request->url_parsed.host.c_str())) {
-			beast::error_code ec{ static_cast<int>(::ERR_get_error()),
-				asio::error::get_ssl_category() };
-			std::cerr << ec.message() << "\n";
-			return;
+		if (!SSL_set_tlsext_host_name(ssl_stream.native_handle(), request->url_parsed.host.c_str())) 
+		{
+			beast::error_code ec{ static_cast<int>(::ERR_get_error()), asio::error::get_ssl_category() };
+			return request->end_in_failure(ec, "SSL_set_tlsext_host_name");
 		}
 
-		resolver.async_resolve(request->url_parsed.host,
+		resolver.async_resolve(
+			request->url_parsed.host,
 			request->url_parsed.port,
-			beast::bind_front_handler(&http_client::on_resolve, shared_from_this()));
+			beast::bind_front_handler(&http_client::on_resolve, shared_from_this())
+		);
 	}
 
 	void on_resolve(beast::error_code ec, asio::ip::tcp::resolver::results_type results)
 	{
-
 		if (ec)
-			return fail(ec, "resolve");
+			return request->end_in_failure(ec, "resolve");
 
 
 		for (auto& it : results)
@@ -426,7 +444,66 @@ struct http_client : public std::enable_shared_from_this<http_client>
 			std::cout << it.host_name() << ":" << it.service_name() << " => " << it.endpoint().address() << ":" << it.endpoint().port() << std::endl;
 		}
 
-		request->finished = true;
+		// Make the connection on the IP address we get from a lookup
+		beast::get_lowest_layer(ssl_stream).async_connect(
+			results,
+			beast::bind_front_handler(&http_client::on_connect, shared_from_this()));
+	}
+
+	void on_connect(beast::error_code ec, asio::ip::tcp::resolver::results_type::endpoint_type)
+	{
+		if (ec)
+			return request->end_in_failure(ec, "connect");
+
+		if (request->url_parsed.scheme == "http")
+		{
+			on_handshake(beast::error_code());
+		}
+		else
+		{
+			// Perform the SSL handshake
+			ssl_stream.async_handshake(
+				ssl::stream_base::client,
+				beast::bind_front_handler(&http_client::on_handshake, shared_from_this())
+			);
+		}
+	}
+
+	void on_handshake(beast::error_code ec)
+	{
+		if (ec)
+			return request->end_in_failure(ec, "handshake");
+
+		// Send the HTTP request to the remote host
+		http::async_write(
+			ssl_stream,
+			request->req,
+			beast::bind_front_handler(&http_client::on_write, shared_from_this()));
+	}
+
+	void on_write(beast::error_code ec, std::size_t bytes_transferred)
+	{
+		boost::ignore_unused(bytes_transferred);
+
+		if (ec)
+			return request->end_in_failure(ec, "write");
+
+		// Receive the HTTP response
+		http::async_read(
+			ssl_stream,
+			request->buffer,
+			request->res,
+			beast::bind_front_handler(&http_client::on_read, shared_from_this()));
+	}
+
+	void on_read(beast::error_code ec, std::size_t bytes_transferred)
+	{
+		boost::ignore_unused(bytes_transferred);
+
+		if (ec)
+			return request->end_in_failure(ec, "read");
+
+		return request->end_in_success();
 	}
 
 };

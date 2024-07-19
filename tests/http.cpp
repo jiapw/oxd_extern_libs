@@ -90,10 +90,12 @@ int main()
 
 	http_mngr.execute(http_req);
 
-	while (!http_req->finished)
+	while (!http_req->ended)
 	{
 		std::this_thread::sleep_for(std::chrono::milliseconds(100));
 	}
+
+	http_req = nullptr;
 
 	http_mngr.stop_work_thread();
 
