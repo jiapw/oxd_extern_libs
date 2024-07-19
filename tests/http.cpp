@@ -80,5 +80,22 @@ int main_t()
 int main()
 {
 	std::string res;
-	simple::http::get("www.baidu.com", "443", "/", "1.1", res);
+	//simple::http::get("www.baidu.com", "443", "/", "1.1", res);
+
+	auto  http_req = std::make_shared<simple::http_request>("https://www.baidu.com");
+
+	simple::http_manager http_mngr;
+
+	http_mngr.start_work_thread();
+
+	http_mngr.execute(http_req);
+
+	while (!http_req->finished)
+	{
+		std::this_thread::sleep_for(std::chrono::milliseconds(100));
+	}
+
+	http_mngr.stop_work_thread();
+
+	return 0;
 }
