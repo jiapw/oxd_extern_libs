@@ -13,266 +13,57 @@
 #include <boost/beast.hpp>
 #include <boost/beast/ssl.hpp>
 
-//#include <boost/beast/core.hpp>
-//#include <boost/beast/http.hpp>
-//#include <boost/beast/ssl.hpp>
 
-/*
-namespace simple {
+// Enum to define your custom error codes
+enum class simple_http_error_code {
+	invalid_url		= 0x1001,
+	invalid_request,
 
-	namespace net = boost::asio; // from <boost/asio.hpp>
-	namespace ssl = boost::asio::ssl; // from <boost/asio/ssl.hpp>
+	timeout_resolve = 0x2001,
+	timeout_connect,
+	timeout_ssl_handshake,
+	timeout_write,
+	timeout_read,
 
-	namespace __details {
+};
 
-		namespace beast = boost::beast; // from <boost/beast.hpp>
-		namespace http = beast::http; // from <boost/beast/http.hpp>
-		using tcp = boost::asio::ip::tcp; // from <boost/asio/ip/tcp.hpp>
 
-		// Report a failure
-		void
-			fail(beast::error_code ec, char const* what)
+class simple_http_error_category : public boost::system::error_category 
+{
+public:
+	const char* name() const noexcept override 
+	{
+		return "simple_http_error_category";
+	}
+
+	std::string message(int ev) const override 
+	{
+		switch (static_cast<simple_http_error_code>(ev)) 
 		{
-			std::cerr << what << ": " << ec.message() << "\n";
+		case simple_http_error_code::invalid_url:
+			return "url is invalid";
+		case simple_http_error_code::invalid_request:
+			return "request is invalid";
+		case simple_http_error_code::timeout_resolve:
+			return "resolve timeout";
+		case simple_http_error_code::timeout_connect:
+			return "connect timeout";
+		case simple_http_error_code::timeout_ssl_handshake:
+			return "ssl handshake timeout";
+		case simple_http_error_code::timeout_write:
+			return "write timeout";
+		case simple_http_error_code::timeout_read:
+			return "read timeout";
+		default:
+			return "unknown error ";
 		}
+	}
+};
 
-		
-		struct session_limit
-		{
-			using duration = std::chrono::steady_clock::duration;
-
-			duration resolve_timeout = std::chrono::milliseconds(10*1000);
-			duration connect_timeout = std::chrono::milliseconds(10*1000);
-		};
-
-		class steady_timer_ex : public boost::asio::steady_timer
-		{
-		public:
-			steady_timer_ex(const executor_type& ex)
-				:boost::asio::steady_timer(ex)
-			{
-			};
-
-			volatile bool finished=false;
-		};
-
-		// Performs an HTTP GET and prints the response
-		class session : public std::enable_shared_from_this<session> {
-			tcp::resolver resolver_;
-			steady_timer_ex timer_;
-			
-			beast::ssl_stream<beast::tcp_stream> stream_;
-			beast::flat_buffer buffer_; // (Must persist between reads)
-			http::request<http::empty_body> req_;
-			http::response<http::string_body> res_;
-			session_limit limit_;
-
-		public:
-			explicit session(net::any_io_executor ex, ssl::context& ssl_ctx)
-				: resolver_(ex)
-				, stream_(ex, ssl_ctx)
-				, timer_(ex)
-
-			{
-			}
-
-			// Start the asynchronous operation
-			void run(char const* host,
-				char const* port,
-				char const* target,
-				int version)
-			{
-				// Set SNI Hostname (many hosts need this to handshake successfully)
-				if (!SSL_set_tlsext_host_name(stream_.native_handle(), host)) {
-					beast::error_code ec{ static_cast<int>(::ERR_get_error()),
-						net::error::get_ssl_category() };
-					std::cerr << ec.message() << "\n";
-					return;
-				}
-
-				// stream_.set_verify_callback(boost::asio::ssl::rfc2818_verification(host));
-
-				// Set up an HTTP GET request message
-				req_.version(version);
-				req_.method(http::verb::get);
-				req_.target(target);
-				req_.set(http::field::host, host);
-				//req_.set(http::field::user_agent, BOOST_BEAST_VERSION_STRING);
-
-				// Look up the domain name
-				timer_.finished = false;
-				resolver_.async_resolve(
-					host,
-					port,
-					beast::bind_front_handler(&session::on_resolve, shared_from_this()));
-
-				// start timer
-				timer_.expires_after(limit_.resolve_timeout);
-				timer_.async_wait([this](const boost::system::error_code& ec) {
-					if (ec != boost::asio::error::operation_aborted) {
-						if (timer_.finished)
-							return;
-						resolver_.cancel(); // Cancel async resolve operation
-					}
-					timer_.finished = true;
-					});
-			}
-
-			void on_resolve(beast::error_code ec, tcp::resolver::results_type results)
-			{
-				timer_.finished = true;
-
-				if (ec)
-					return fail(ec, "resolve");
-
-
-				for (auto& it : results)
-				{ 
-					 std::cout << it.host_name() << ":"<<it.service_name()<< " => " << it.endpoint().address()<<":"<<it.endpoint().port() << std::endl;
-				}
-
-
-				// Set a timeout on the operation
-				beast::get_lowest_layer(stream_).expires_after(limit_.connect_timeout);
-
-				// Make the connection on the IP address we get from a lookup
-				beast::get_lowest_layer(stream_).async_connect(
-					results,
-					beast::bind_front_handler(&session::on_connect, shared_from_this()));
-			}
-
-			void on_connect(beast::error_code ec,
-				tcp::resolver::results_type::endpoint_type)
-			{
-				if (ec)
-					return fail(ec, "connect");
-
-				// Perform the SSL handshake
-				stream_.async_handshake(
-					ssl::stream_base::client,
-					beast::bind_front_handler(&session::on_handshake, shared_from_this()));
-			}
-
-			void on_handshake(beast::error_code ec)
-			{
-				if (ec)
-					return fail(ec, "handshake");
-
-				// Set a timeout on the operation
-				beast::get_lowest_layer(stream_).expires_after(std::chrono::seconds(30));
-
-				// Send the HTTP request to the remote host
-				http::async_write(
-					stream_,
-					req_,
-					beast::bind_front_handler(&session::on_write, shared_from_this()));
-			}
-
-			void on_write(beast::error_code ec, std::size_t bytes_transferred)
-			{
-				boost::ignore_unused(bytes_transferred);
-
-				if (ec)
-					return fail(ec, "write");
-
-				// Receive the HTTP response
-				http::async_read(
-					stream_,
-					buffer_,
-					res_,
-					beast::bind_front_handler(&session::on_read, shared_from_this()));
-			}
-
-			void on_read(beast::error_code ec, std::size_t bytes_transferred)
-			{
-				boost::ignore_unused(bytes_transferred);
-
-				if (ec)
-					return fail(ec, "read");
-
-				// Write the message to standard out
-				std::cout << res_ << std::endl;
-
-				// Set a timeout on the operation
-				beast::get_lowest_layer(stream_).expires_after(std::chrono::seconds(30));
-
-				// Gracefully close the stream
-				stream_.async_shutdown(
-					beast::bind_front_handler(&session::on_shutdown, shared_from_this()));
-			}
-
-			void on_shutdown(beast::error_code ec)
-			{
-				if (ec == net::error::eof) {
-					// Rationale:
-					// http://stackoverflow.com/questions/25587403/boost-asio-ssl-async-shutdown-always-finishes-with-an-error
-					ec = {};
-				}
-				if (ec)
-					return fail(ec, "shutdown");
-
-				// If we get here then the connection is closed gracefully
-			}
-		};
-
-	} // namespace __details
-
-	class io_context {
-	public:
-		io_context() { }
-		~io_context() {
-
-		};
-
-	protected:
-		boost::asio::io_context io_c;
-	};
-
-	class http {
-	public:
-		enum status_code : int {
-			http_ok = 200,
-
-			net_error = -1,
-			net_error_dns_query_failed = -2,
-		};
-
-		static int get(
-			const std::string& host,
-			const std::string& port,
-			const std::string& target,
-			const std::string& version,
-			std::string& res_body)
-		{
-			// The io_context is required for all I/O
-			net::io_context io_ctx;
-
-			// The SSL context is required, and holds certificates
-			ssl::context ssl_ctx{ ssl::context::tlsv12_client };
-
-			// This holds the root certificate used for verification
-			// load_root_certificates(ctx);
-			// ssl_ctx.set_default_verify_paths();
-
-			// Verify the remote server's certificate
-			// ssl_ctx.set_verify_mode(ssl::verify_peer);
-
-			std::make_shared<__details::session>(net::make_strand(io_ctx), ssl_ctx)
-				->run(host.c_str(),
-					port.c_str(),
-					target.c_str(),
-					(version == "1.1" ? 11 : 10));
-
-			io_ctx.run();
-			return EXIT_SUCCESS;
-		}
-		
-	};
-
-} // namespace simple
-
-*/
-
+boost::beast::error_code make_simple_http_error_code(simple_http_error_code e) {
+	static simple_http_error_category category;
+	return boost::beast::error_code(static_cast<int>(e), category);
+}
 
 namespace simple{
 
@@ -281,6 +72,10 @@ namespace beast = boost::beast;
 namespace ssl	= boost::asio::ssl;
 namespace http	= boost::beast::http;
 
+struct memory_block_1m
+{
+	char data[1024 * 1024];
+};
 
 struct parsed_url
 {
@@ -290,6 +85,25 @@ struct parsed_url
 	std::string path;
 	std::string query;
 	std::string fragment;
+
+	void clear()
+	{
+		scheme.clear();
+		host.clear();
+		port.clear();
+		path.clear();
+		query.clear();
+		fragment.clear();
+	}
+	bool valid()
+	{
+		return (
+			scheme.length() &&
+			host.length() &&
+			port.length() &&
+			path.length()
+		);
+	}
 };
 
 bool parse_url(const std::string& url, parsed_url& out) 
@@ -324,7 +138,7 @@ bool parse_url(const std::string& url, parsed_url& out)
 		return true;
 	}
 	else {
-		std::cerr << "Invalid URL format: " << url << std::endl;
+		// std::cerr << "Invalid URL format: " << url << std::endl;
 		return false;
 	}
 }
@@ -340,17 +154,27 @@ bool fail(char const* message, char const* what)
 	return false;
 }
 
-
 struct http_request: public std::enable_shared_from_this<http_request>
 {
-	bool ended = false;
+	struct limit_in_ms
+	{
+		uint16_t resolve_timeout = 5 * 1000;
+		uint16_t connect_timeout = 5 * 1000;
+		uint16_t handshake_timeout = 5 * 1000;
+		uint16_t write_timeout = 5 * 1000;
+		uint16_t read_timeout = 1 * 1000;
+	};
+
+	limit_in_ms limit;
+
+	volatile bool ended = true;
 
 	int version = 11; // http 1.1
 	
 	parsed_url url_parsed;
 
 	http::request<http::empty_body> req;
-	http::response<http::string_body> res;
+	http::response_parser<http::string_body> res;
 
 	beast::flat_buffer buffer;
 
@@ -358,23 +182,28 @@ struct http_request: public std::enable_shared_from_this<http_request>
 
 	http_request(const std::string& url)
 	{
-		config(url);
+		init(url);
 	}
 	~http_request()
 	{
 		return;
 	}
-	bool config(const std::string& s)
+	bool init(const std::string& s)
 	{
-		return config("GET", s);
+		return init("GET", s);
 	}
-	bool config(std::string_view method, const std::string& s)
+	bool init(std::string_view method, const std::string& s)
 	{
+		ended = false;
 		req.clear();
-		res.clear();
+		res.body_limit(-1);
+		error_code.clear();
 
 		if (!parse_url(s, url_parsed))
-			return fail("Invalid URL format", "parse url");
+		{
+			end_in_failure(make_simple_http_error_code(simple_http_error_code::invalid_url), "parse url");
+			return false;
+		}
 
 		req.method_string(method);
 		req.version(version);
@@ -397,17 +226,40 @@ struct http_request: public std::enable_shared_from_this<http_request>
 	}
 };
 
+struct steady_timer_ex : public boost::asio::steady_timer
+{
+	//std::string timeout_info;
+	steady_timer_ex(asio::io_context& ioc_ctx)
+		: boost::asio::steady_timer(ioc_ctx)
+	{
+	}
+	template <
+		BOOST_ASIO_COMPLETION_TOKEN_FOR(void(boost::system::error_code))
+		WaitToken = asio::default_completion_token_t<executor_type>>
+	void async_wait_ex(int64_t timeout_ms, WaitToken&& token = asio::default_completion_token_t<executor_type>())
+	{
+		//this->timeout_info = timeout_info;
+		this->expires_after(std::chrono::milliseconds(timeout_ms));
+		this->async_wait(token);
+	}
+};
+
 struct http_client : public std::enable_shared_from_this<http_client>
 {
 	beast::ssl_stream<beast::tcp_stream> ssl_stream;
+	beast::tcp_stream tcp_stream;
+	steady_timer_ex timer;
+
 	asio::ip::tcp::resolver resolver;
 
 	std::shared_ptr<http_request> request; 
+	bool is_https_request = false;
 	
 	http_client(asio::io_context& ioc_ctx, ssl::context& ssl_ctx)
 		: ssl_stream(ioc_ctx, ssl_ctx)
+		, tcp_stream(ioc_ctx)
 		, resolver(ioc_ctx)
-
+		, timer(ioc_ctx)
 	{
 	}
 	~http_client()
@@ -415,15 +267,28 @@ struct http_client : public std::enable_shared_from_this<http_client>
 		return;
 	}
 
+	inline beast::tcp_stream& get_tcp_stream()
+	{
+		return is_https_request ? beast::get_lowest_layer(ssl_stream) : tcp_stream;
+	}
+
 	void execute(std::shared_ptr<http_request> req)
 	{
 		request = req;
+		if (request->ended)
+			return request->end_in_failure(make_simple_http_error_code(simple_http_error_code::invalid_request), "http_client::execute");
 
-		// Set SNI Hostname (many hosts need this to handshake successfully)
-		if (!SSL_set_tlsext_host_name(ssl_stream.native_handle(), request->url_parsed.host.c_str())) 
+
+		is_https_request = request->url_parsed.scheme == "https";
+
+		if (is_https_request)
 		{
-			beast::error_code ec{ static_cast<int>(::ERR_get_error()), asio::error::get_ssl_category() };
-			return request->end_in_failure(ec, "SSL_set_tlsext_host_name");
+			// Set SNI Hostname (many hosts need this to handshake successfully)
+			if (!SSL_set_tlsext_host_name(ssl_stream.native_handle(), request->url_parsed.host.c_str()))
+			{
+				beast::error_code ec{ static_cast<int>(::ERR_get_error()), asio::error::get_ssl_category() };
+				return request->end_in_failure(ec, "SSL_set_tlsext_host_name");
+			}
 		}
 
 		resolver.async_resolve(
@@ -431,77 +296,179 @@ struct http_client : public std::enable_shared_from_this<http_client>
 			request->url_parsed.port,
 			beast::bind_front_handler(&http_client::on_resolve, shared_from_this())
 		);
+
+		
+		timer.async_wait_ex( 
+			request->limit.resolve_timeout,
+			[this](const boost::system::error_code& ec)
+			{
+				if (ec != boost::asio::error::operation_aborted)
+					resolver.cancel(); // cancel async_resolve
+			}
+		);
 	}
 
 	void on_resolve(beast::error_code ec, asio::ip::tcp::resolver::results_type results)
 	{
+		timer.cancel();
+
 		if (ec)
 			return request->end_in_failure(ec, "resolve");
-
 
 		for (auto& it : results)
 		{
 			std::cout << it.host_name() << ":" << it.service_name() << " => " << it.endpoint().address() << ":" << it.endpoint().port() << std::endl;
 		}
 
-		// Make the connection on the IP address we get from a lookup
-		beast::get_lowest_layer(ssl_stream).async_connect(
-			results,
-			beast::bind_front_handler(&http_client::on_connect, shared_from_this()));
+		get_tcp_stream().async_connect(
+				results,
+				beast::bind_front_handler(&http_client::on_connect, shared_from_this())
+		);
+		
+		timer.async_wait_ex(
+			request->limit.connect_timeout,
+			[this](const boost::system::error_code& ec)
+			{
+				if (ec != boost::asio::error::operation_aborted)
+				{
+					get_tcp_stream().close(); // cancel async_connect
+				}
+					
+			}
+		);
 	}
 
 	void on_connect(beast::error_code ec, asio::ip::tcp::resolver::results_type::endpoint_type)
 	{
+		timer.cancel();
+
 		if (ec)
 			return request->end_in_failure(ec, "connect");
 
-		if (request->url_parsed.scheme == "http")
-		{
-			on_handshake(beast::error_code());
-		}
-		else
+		if (is_https_request)
 		{
 			// Perform the SSL handshake
 			ssl_stream.async_handshake(
 				ssl::stream_base::client,
 				beast::bind_front_handler(&http_client::on_handshake, shared_from_this())
 			);
+
+			timer.async_wait_ex(
+				request->limit.handshake_timeout,
+				[this](const boost::system::error_code& ec)
+				{
+					if (ec != boost::asio::error::operation_aborted)
+						tcp_stream.close(); // cancel async_connect
+				}
+			);
+		}
+		else
+		{
+			on_handshake(ec);
 		}
 	}
 
 	void on_handshake(beast::error_code ec)
 	{
+		timer.cancel();
+
 		if (ec)
 			return request->end_in_failure(ec, "handshake");
 
-		// Send the HTTP request to the remote host
-		http::async_write(
-			ssl_stream,
-			request->req,
-			beast::bind_front_handler(&http_client::on_write, shared_from_this()));
+		if (is_https_request)
+		{
+			http::async_write(
+				ssl_stream,
+				request->req,
+				beast::bind_front_handler(&http_client::on_write, shared_from_this())
+			);
+
+			timer.async_wait_ex(
+				request->limit.write_timeout,
+				[this](const boost::system::error_code& ec)
+				{
+					if (ec != boost::asio::error::operation_aborted)
+						ssl_stream.next_layer().close(); // cancel async_write
+				}
+			);
+		}
+		else
+		{
+			http::async_write(
+				tcp_stream,
+				request->req,
+				beast::bind_front_handler(&http_client::on_write, shared_from_this())
+			);
+
+			timer.async_wait_ex(
+				request->limit.write_timeout,
+				[this](const boost::system::error_code& ec)
+				{
+					if (ec != boost::asio::error::operation_aborted)
+						tcp_stream.close(); // cancel async_write
+				}
+			);
+		}
 	}
 
 	void on_write(beast::error_code ec, std::size_t bytes_transferred)
 	{
+		timer.cancel();
+
 		boost::ignore_unused(bytes_transferred);
 
 		if (ec)
 			return request->end_in_failure(ec, "write");
 
-		// Receive the HTTP response
-		http::async_read(
-			ssl_stream,
-			request->buffer,
-			request->res,
-			beast::bind_front_handler(&http_client::on_read, shared_from_this()));
+		if (is_https_request)
+		{
+			http::async_read(
+				ssl_stream,
+				request->buffer,
+				request->res,
+				beast::bind_front_handler(&http_client::on_read, shared_from_this())
+			);
+
+			timer.async_wait_ex(
+				request->limit.read_timeout,
+				[this](const boost::system::error_code& ec)
+				{
+					if (ec != boost::asio::error::operation_aborted)
+						ssl_stream.next_layer().close(); // cancel async_write
+				}
+			);
+		}
+		else
+		{
+			http::async_read(
+				tcp_stream,
+				request->buffer,
+				request->res,
+				beast::bind_front_handler(&http_client::on_read, shared_from_this())
+			);
+
+			timer.async_wait_ex(
+				request->limit.read_timeout,
+				[this](const boost::system::error_code& ec)
+				{
+					if (ec != boost::asio::error::operation_aborted)
+						tcp_stream.close(); // cancel async_write
+				}
+			);
+		}
+
 	}
 
 	void on_read(beast::error_code ec, std::size_t bytes_transferred)
 	{
+		timer.cancel();
+
 		boost::ignore_unused(bytes_transferred);
 
 		if (ec)
 			return request->end_in_failure(ec, "read");
+
+		std::cout << "url:"<< request->url_parsed.host<< ", size:" << request->res.get().body().size() << "\n";
 
 		return request->end_in_success();
 	}
@@ -560,7 +527,23 @@ struct http_manager
 	}
 };
 
+bool sync_http_get(const std::string& url, std::string& out)
+{
+	asio::io_context io_ctx;
+	ssl::context ssl_ctx{ ssl::context::tlsv12_client };
 
+	auto request = std::make_shared<simple::http_request>(url);
+	if (request->ended) // url is invalid
+		return false;
 
+	auto client = std::make_shared<http_client>(io_ctx, ssl_ctx);
+	client->execute(request);
+	io_ctx.run();
+	if (request->res.get().result_int() == 200)
+	{
+		out = request->res.get().body();
+	}
+	return false;
+}
 
 } // namespace simple

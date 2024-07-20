@@ -81,23 +81,32 @@ int main()
 {
 	std::string res;
 	//simple::http::get("www.baidu.com", "443", "/", "1.1", res);
+	/*
+	auto  http_req_1 = std::make_shared<simple::http_request>("http://www.baidu.com");
+	auto  http_req_2 = std::make_shared<simple::http_request>("http://wiremin.org");
 
-	auto  http_req = std::make_shared<simple::http_request>("https://www.baidu.com");
 
 	simple::http_manager http_mngr;
 
 	http_mngr.start_work_thread();
+	std::this_thread::sleep_for(std::chrono::milliseconds(500));
 
-	http_mngr.execute(http_req);
+	http_mngr.execute(http_req_1);
+	http_mngr.execute(http_req_2);
 
-	while (!http_req->ended)
+	while (!http_req_1->ended || !http_req_2->ended)
 	{
 		std::this_thread::sleep_for(std::chrono::milliseconds(100));
 	}
 
-	http_req = nullptr;
+	http_req_1 = nullptr;
+	http_req_2 = nullptr;
 
 	http_mngr.stop_work_thread();
+	*/
+
+	//for (;;)
+		simple::sync_http_get("https://dldir1v6.qq.com/weixin/Windows/WeChatSetup.exe", res);
 
 	return 0;
 }
