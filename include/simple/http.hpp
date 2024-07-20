@@ -162,7 +162,8 @@ struct http_request: public std::enable_shared_from_this<http_request>
 		uint16_t connect_timeout = 5 * 1000;
 		uint16_t handshake_timeout = 5 * 1000;
 		uint16_t write_timeout = 5 * 1000;
-		uint16_t read_timeout = 1 * 1000;
+		uint16_t read_response_header_timeout = 5 * 1000;
+		uint16_t read_response_body_timeout = 5 * 1000;
 	};
 
 	limit_in_ms limit;
@@ -380,7 +381,7 @@ struct http_client : public std::enable_shared_from_this<http_client>
 			http::async_write(
 				ssl_stream,
 				request->req,
-				beast::bind_front_handler(&http_client::on_write, shared_from_this())
+				beast::bind_front_handler(&http_client::on_write_request, shared_from_this())
 			);
 
 			timer.async_wait_ex(
@@ -397,7 +398,7 @@ struct http_client : public std::enable_shared_from_this<http_client>
 			http::async_write(
 				tcp_stream,
 				request->req,
-				beast::bind_front_handler(&http_client::on_write, shared_from_this())
+				beast::bind_front_handler(&http_client::on_write_request, shared_from_this())
 			);
 
 			timer.async_wait_ex(
@@ -411,7 +412,7 @@ struct http_client : public std::enable_shared_from_this<http_client>
 		}
 	}
 
-	void on_write(beast::error_code ec, std::size_t bytes_transferred)
+	void on_write_request(beast::error_code ec, std::size_t bytes_transferred)
 	{
 		timer.cancel();
 
@@ -422,15 +423,15 @@ struct http_client : public std::enable_shared_from_this<http_client>
 
 		if (is_https_request)
 		{
-			http::async_read(
+			http::async_read_header(
 				ssl_stream,
 				request->buffer,
 				request->res,
-				beast::bind_front_handler(&http_client::on_read, shared_from_this())
+				beast::bind_front_handler(&http_client::on_read_response_header, shared_from_this())
 			);
 
 			timer.async_wait_ex(
-				request->limit.read_timeout,
+				request->limit.read_response_header_timeout,
 				[this](const boost::system::error_code& ec)
 				{
 					if (ec != boost::asio::error::operation_aborted)
@@ -440,15 +441,15 @@ struct http_client : public std::enable_shared_from_this<http_client>
 		}
 		else
 		{
-			http::async_read(
+			http::async_read_header(
 				tcp_stream,
 				request->buffer,
 				request->res,
-				beast::bind_front_handler(&http_client::on_read, shared_from_this())
+				beast::bind_front_handler(&http_client::on_read_response_header, shared_from_this())
 			);
 
 			timer.async_wait_ex(
-				request->limit.read_timeout,
+				request->limit.read_response_header_timeout,
 				[this](const boost::system::error_code& ec)
 				{
 					if (ec != boost::asio::error::operation_aborted)
@@ -459,20 +460,60 @@ struct http_client : public std::enable_shared_from_this<http_client>
 
 	}
 
-	void on_read(beast::error_code ec, std::size_t bytes_transferred)
+	void on_read_response_header(beast::error_code ec, std::size_t bytes_transferred)
 	{
 		timer.cancel();
 
-		boost::ignore_unused(bytes_transferred);
-
 		if (ec)
-			return request->end_in_failure(ec, "read");
+			return request->end_in_failure(ec, "read response header");
 
-		std::cout << "url:"<< request->url_parsed.host<< ", size:" << request->res.get().body().size() << "\n";
+		 //std::cout << "url:"<< request->url_parsed.host<< ", size:" << request->res.get().body().size() << "\n";
 
-		return request->end_in_success();
+		//return request->end_in_success();
+
+		std::cout << "Headers received: " << request->res.get() << std::endl;
+
+		async_read_response_body_chunk();
 	}
 
+
+
+	void async_read_response_body_chunk()
+	{
+		ssl_stream.async_read_some(
+			boost::asio::buffer(request->buffer.prepare(1024)),
+			beast::bind_front_handler(&http_client::on_read_response_chunk, shared_from_this())
+		);
+
+		/*
+		http::async_read_some(
+			ssl_stream,
+			request->buffer,
+			request->res,
+			beast::bind_front_handler(&http_client::on_read_response_chunk, shared_from_this())
+		);
+		*/
+	}
+
+	void on_read_response_chunk(beast::error_code ec, std::size_t bytes_transferred)
+	{
+		if (ec == boost::asio::error::eof)
+		{
+			return request->end_in_success();
+		}
+
+		if (ec)
+			return request->end_in_failure(ec, "read response chunk");
+
+
+		request->buffer.commit(bytes_transferred);
+
+		std::cout << boost::beast::buffers_to_string(request->buffer.data());
+
+		request->buffer.consume(bytes_transferred);
+
+		async_read_response_body_chunk();
+	}
 };
 
 struct io_context_work_thread 

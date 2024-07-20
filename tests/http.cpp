@@ -106,7 +106,9 @@ int main()
 	*/
 
 	//for (;;)
-		simple::sync_http_get("https://dldir1v6.qq.com/weixin/Windows/WeChatSetup.exe", res);
+		simple::sync_http_get("https://www.baidu.com", res);
+
+
 
 	return 0;
 }
