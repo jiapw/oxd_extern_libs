@@ -255,6 +255,8 @@ struct http_client : public std::enable_shared_from_this<http_client>
 
 	std::shared_ptr<http_request> request; 
 	bool is_https_request = false;
+	uint64_t content_length = 0;
+	uint64_t content_recv = 0;
 	
 	http_client(asio::io_context& ioc_ctx, ssl::context& ssl_ctx)
 		: ssl_stream(ioc_ctx, ssl_ctx)
@@ -473,8 +475,71 @@ struct http_client : public std::enable_shared_from_this<http_client>
 
 		std::cout << "Headers received: " << request->res.get() << std::endl;
 
+		if (auto& opt = request->res.content_length())
+		{
+			content_length = opt.value();
+		}
+
 		async_read_response_body_chunk();
+		//async_read_response_body();
 	}
+
+
+	void async_read_response_body()
+	{
+		if (is_https_request)
+		{
+			http::async_read(
+				ssl_stream,
+				request->buffer,
+				request->res,
+				beast::bind_front_handler(&http_client::on_read_response_body, shared_from_this())
+			);
+
+			timer.async_wait_ex(
+				request->limit.read_response_body_timeout,
+				[this](const boost::system::error_code& ec)
+				{
+					if (ec != boost::asio::error::operation_aborted)
+						ssl_stream.next_layer().close(); // cancel async_write
+				}
+			);
+		}
+		else
+		{
+			http::async_read(
+				tcp_stream,
+				request->buffer,
+				request->res,
+				beast::bind_front_handler(&http_client::on_read_response_body, shared_from_this())
+			);
+
+			timer.async_wait_ex(
+				request->limit.read_response_body_timeout,
+				[this](const boost::system::error_code& ec)
+				{
+					if (ec != boost::asio::error::operation_aborted)
+						tcp_stream.close(); // cancel async_write
+				}
+			);
+		}
+	}
+
+
+	void on_read_response_body(beast::error_code ec, std::size_t bytes_transferred)
+	{
+		timer.cancel();
+
+		boost::ignore_unused(bytes_transferred);
+
+		if (ec)
+			return request->end_in_failure(ec, "read response body");
+
+		std::cout << "url:" << request->url_parsed.host << ", size:" << request->res.get().body().size() << "\n";
+
+		return request->end_in_success();
+	}
+
 
 
 
@@ -511,6 +576,11 @@ struct http_client : public std::enable_shared_from_this<http_client>
 		std::cout << boost::beast::buffers_to_string(request->buffer.data());
 
 		request->buffer.consume(bytes_transferred);
+
+		content_recv += bytes_transferred;
+
+		if (content_recv==content_length)
+			return request->end_in_success();
 
 		async_read_response_body_chunk();
 	}
@@ -582,7 +652,7 @@ bool sync_http_get(const std::string& url, std::string& out)
 	io_ctx.run();
 	if (request->res.get().result_int() == 200)
 	{
-		out = request->res.get().body();
+		out = std::move(request->res.get().body());
 	}
 	return false;
 }
