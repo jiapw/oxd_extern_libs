@@ -6,6 +6,8 @@
 #include <boost/asio.hpp>
 #include <boost/asio/strand.hpp>
 
+#include <cassert>
+
 boost::asio::io_context m_ioc;
 boost::asio::executor_work_guard<boost::asio::io_context::executor_type> work_guard = boost::asio::make_work_guard(m_ioc);
 boost::asio::io_context::strand m_strand(m_ioc);
@@ -79,7 +81,7 @@ int main_t()
 
 int main()
 {
-	std::string res;
+	//std::string res;
 	//simple::http::get("www.baidu.com", "443", "/", "1.1", res);
 	/*
 	auto  http_req_1 = std::make_shared<simple::http_request>("http://www.baidu.com");
@@ -106,10 +108,38 @@ int main()
 	*/
 
 	//for (;;)
-		simple::sync_http_get("https://dldir1v6.qq.com/weixin/Windows/WeChatSetup.exe", res);
+		//simple::http_tools::sync_http_get("https://dldir1v6.qq.com/weixin/Windows/WeChatSetup.exe", res);
 
 	//simple::sync_http_get("https://www.baidu.com", res);
 
+	std::string url = "https://cls.2ndu.com/chunk-store/v1/hv?file_id=213d13a37a7cd2dcc08cdc638210df728dd435718f75457cbf6d275fe8b1bfe4&bin=true";
+
+	if (0)
+	{
+		auto r = simple::http_tools::sync_http_get(url);
+		assert(r);
+	}
+
+	if (0)
+	{
+		auto r = simple::http_tools::sync_http_get(url, (void*)(1));
+		assert(r);
+	}
+
+	{
+		simple::http_manager http_mngr;
+		http_mngr.start_work_thread();
+		{
+			auto  http_req = std::make_shared<simple::http_request>(url, nullptr);
+			http_mngr.execute(http_req);
+
+			while (!http_req->ended)
+			{
+				std::this_thread::sleep_for(std::chrono::milliseconds(100));
+			}
+		}
+		http_mngr.stop_work_thread();
+	}
 
 	return 0;
 }
