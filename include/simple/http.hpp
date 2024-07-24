@@ -194,6 +194,9 @@ struct http_url
 	}
 };
 
+using http_end_callback = std::function<void(int status_code, const std::string& body)>;
+using http_chunk_callback = std::function<void(std::string_view& chunk)>;
+
 struct http_request // : public std::enable_shared_from_this<http_request>
 {
 	struct limit_value
@@ -213,8 +216,10 @@ struct http_request // : public std::enable_shared_from_this<http_request>
 
 	volatile bool ended = true;
 
+	beast::error_code error_code;
+
 	int version = 11; // http 1.1
-	
+		
 	http_url url;
 
 	http::request<http::empty_body> req;
@@ -223,31 +228,31 @@ struct http_request // : public std::enable_shared_from_this<http_request>
 
 	http::response_parser<http::buffer_body> res_buffer_body;
 	char chunk_buffer[1024*10];
-	void* call_back = nullptr;
 
-	beast::error_code error_code;
-
-	http_request(const std::string& url, void* call_back)
+	http_end_callback end_callback ;
+	http_chunk_callback chunk_callback;
+	
+	http_request(const std::string& url, const http_end_callback& end_cb= nullptr, const http_chunk_callback& chunk_cb = nullptr)
+		: end_callback(end_cb)
+		, chunk_callback(chunk_cb)
 	{
 		res_string_body.body_limit(limited.string_body_limit);
 		res_buffer_body.body_limit(std::numeric_limits<std::uint64_t>::max());
-		init(url, call_back);
+		init(url);
 	}
 	~http_request()
 	{
 		return;
 	}
-	bool init(const std::string& s, void* call_back)
+	bool init(const std::string& s)
 	{
-		return init("GET", s, call_back);
+		return init("GET", s);
 	}
-	bool init(std::string_view method, const std::string& s, void* call_back)
+	bool init(std::string_view method, const std::string& s)
 	{
 		ended = false;
 		req.clear();
 		error_code.clear();
-		
-		this->call_back = call_back;
 
 		if (!url.parse(s))
 		{
@@ -263,8 +268,21 @@ struct http_request // : public std::enable_shared_from_this<http_request>
 		return true;
 	}
 
+	void call_end_func()
+	{
+		if (end_callback)
+		{
+			if (chunk_callback)
+				end_callback(res_buffer_body.get().result_int(), "");
+			else
+				end_callback(res_string_body.get().result_int(), res_string_body.get().body());
+		}
+	}
+
 	void end_in_failure(const beast::error_code ec, const std::string& info)
 	{
+		call_end_func();
+
 		ended = true;
 		error_code = ec;
 		return fail(ec, info.c_str());
@@ -272,6 +290,8 @@ struct http_request // : public std::enable_shared_from_this<http_request>
 
 	void end_in_success()
 	{
+		call_end_func();
+
 		ended = true;
 	}
 
@@ -489,7 +509,7 @@ struct http_client : public std::enable_shared_from_this<http_client>
 
 		if (is_https_request)
 		{
-			if (request->call_back)
+			if (request->chunk_callback)
 				http::async_read_header(
 					ssl_stream_,
 					buffer,
@@ -515,7 +535,7 @@ struct http_client : public std::enable_shared_from_this<http_client>
 		}
 		else
 		{
-			if (request->call_back)
+			if (request->chunk_callback)
 				http::async_read_header(
 					tcp_stream_,
 					buffer,
@@ -557,12 +577,12 @@ struct http_client : public std::enable_shared_from_this<http_client>
 
 		// std::cout << "Headers received: " << request->res_empty_body.get() << std::endl;
 
-		if (auto& opt = request->call_back ? request->res_buffer_body.content_length() : request->res_string_body.content_length())
+		if (auto& opt = request->chunk_callback ? request->res_buffer_body.content_length() : request->res_string_body.content_length())
 		{
 			content_length = opt.value();
 		}
 
-		if (request->call_back)
+		if (request->chunk_callback)
 			async_read_response_body_chunk();
 		else
 			async_read_response_body();
@@ -686,6 +706,8 @@ struct http_client : public std::enable_shared_from_this<http_client>
 
 		auto& body = request->res_buffer_body.get().body();
 		std::string_view body_chunk = std::string_view(request->chunk_buffer, sizeof(request->chunk_buffer)-body.size);
+		if (request->chunk_callback)
+			request->chunk_callback(body_chunk);
 		
 		// std::cout << body_chunk;
 
@@ -694,7 +716,7 @@ struct http_client : public std::enable_shared_from_this<http_client>
 		//static int i = 0;
 
 		//if (i++ %10000==0)
-		std::cout << "recv:" << content_recv << "\n";
+		//std::cout << "recv:" << content_recv << "\n";
 		
 
 		if (request->res_buffer_body.is_done())
@@ -766,7 +788,7 @@ struct http_manager
 	bool exist_task(const std::string& url)
 	{
 		auto f = io_ctx.post(
-			boost::asio::use_future([this, &url]()->size_t
+			boost::asio::use_future([this, &url]()->size_t // because f.wait(), we can capture url by reference
 			{
 				return clients.count(url);
 			})
@@ -775,15 +797,15 @@ struct http_manager
 		return f.get();
 	}
 
-	bool add_task(const std::string& url)
+	bool add_task(const std::string& url, const http_end_callback& end_cb = nullptr, const http_chunk_callback& chunk_cb = nullptr)
 	{
 		auto f = io_ctx.post(
-			boost::asio::use_future([this, &url]()->size_t
+			boost::asio::use_future([this, &url, &end_cb, &chunk_cb]()->size_t // because f.wait(), we can capture them by reference
 				{
 					if (clients.count(url))
 						return false;
 
-					auto request = std::make_shared<http_request>(url, nullptr);
+					auto request = std::make_shared<http_request>(url, end_cb, chunk_cb);
 					auto client = std::make_shared<http_client>(io_ctx, ssl_ctx);
 					clients[url] = client;
 					client->execute(request);
@@ -803,7 +825,7 @@ struct http_tools
 		asio::io_context io_ctx;
 		ssl::context ssl_ctx{ ssl::context::tlsv13_client };
 
-		auto request = std::make_shared<simple::http_request>(url, callback);
+		auto request = std::make_shared<simple::http_request>(url);
 		if (request->ended) // url is invalid
 			return false;
 

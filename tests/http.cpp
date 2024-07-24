@@ -130,7 +130,17 @@ int main()
 		simple::http_manager http_mngr;
 		http_mngr.start_work_thread();
 		{
-			auto  http_req = std::make_shared<simple::http_request>(url, nullptr);
+			auto  http_req = std::make_shared<simple::http_request>(url,
+				[](int status_code, const std::string& body)->void
+				{
+					printf("[%d] size:%d \n", status_code, body.size());
+				},
+				[](std::string_view& chunk)->void
+				{
+					printf("recv chunk size:%d \n", chunk.size());
+				}
+
+			);
 			http_mngr.execute(http_req);
 
 			while (!http_req->ended)
