@@ -7,9 +7,8 @@
 #include <chrono>
 
 #include <future>
+#include <unordered_map>
 
-#include <boost/unordered/concurrent_flat_map.hpp>
-#include <map>
 #include <boost/algorithm/string.hpp>
 
 #include <boost/asio.hpp>
@@ -752,17 +751,11 @@ struct io_context_work_thread
 	}
 };
 
-
-struct http_client2
-{
-	int i = 0;
-};
-
 struct http_manager
 {
 	//boost::unordered::concurrent_flat_map<std::string, std::shared_ptr<http_client>> clients;
 
-	std::map<std::string, std::shared_ptr<http_client>> clients;
+	std::unordered_map<std::string, std::shared_ptr<http_client>> clients;
 
 	asio::io_context io_ctx;
 	ssl::context ssl_ctx{ ssl::context::tlsv13_client };
