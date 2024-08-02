@@ -112,7 +112,7 @@ int main()
 
 	//simple::sync_http_get("https://www.baidu.com", res);
 
-	std::string url = "https://cls.2ndu.com/chunk-store/v1/hv?file_id=213d13a37a7cd2dcc08cdc638210df728dd435718f75457cbf6d275fe8b1bfe4&bin=true";
+	std::string url = "https://cls.2ndu.com/chunk-store/v1/hv?file_id=ab7cb16a9a44d65c0ff524fc7518909f0fd4a3314aecd38ecc53c7a94ff0d4c9";
 
 	if (0)
 	{
@@ -126,24 +126,36 @@ int main()
 		assert(r);
 	}
 
+#define BLOCK_READ
+
 	{
 		simple::http_manager http_mngr;
 		http_mngr.start_work_thread();
 		{
-			auto  http_req = std::make_shared<simple::http_request>(url,
-				[](int status_code, const std::string& body)->void
+			auto  http_req = std::make_shared<simple::http_context>(url,
+				[](const simple::http_context* ctx, int status_code)->void
 				{
-					printf("[%d] size:%d \n", status_code, body.size());
+					printf("recv header:\n status code:%d \n content length:%lld \n", status_code, ctx->response.content_length);
 				},
-				[](std::string_view& chunk)->void
+
+#if defined(BLOCK_READ)
+				[](const simple::http_context* ctx, uint64_t offset, std::string_view& block)->void
 				{
-					printf("recv chunk size:%d \n", chunk.size());
+					//printf("recv block: offset: %lld, size:%lld \n", offset, block.size());
+				},
+#else
+				nullptr,
+#endif
+
+				[](const simple::http_context* ctx, int status_code, const std::string& body)->void
+				{
+					printf("http finish:\n status code:%d, total size:%lld \n", status_code, ctx->response.content_length);
 				}
 
 			);
 			http_mngr.execute(http_req);
 
-			while (!http_req->ended)
+			while (!http_req->finished)
 			{
 				std::this_thread::sleep_for(std::chrono::milliseconds(100));
 			}
