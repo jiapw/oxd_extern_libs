@@ -1,5 +1,6 @@
 #include <simple/http.hpp>
 #include <simple/json.hpp>
+#include <simple/time.hpp>
 
 #include <thread>
 #include <chrono>
@@ -128,6 +129,9 @@ int main()
 
 #define BLOCK_READ
 
+	simple::nanoseconds::timestamp tm;
+	printf("start: %lld \n", simple::ms::now());
+	simple::seconds::sleep(10);
 	{
 		simple::http_manager http_mngr;
 		http_mngr.start_work_thread();
@@ -162,6 +166,7 @@ int main()
 		}
 		http_mngr.stop_work_thread();
 	}
-
+	printf("stop: %lld \n", simple::ms::now());
+	printf("elapsed: %lld \n", tm.elapsed());
 	return 0;
 }
