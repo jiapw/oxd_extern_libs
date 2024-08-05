@@ -225,7 +225,7 @@ public:
 			return std::string_view(buffer_memory, sizeof(buffer_memory) - body.size);
 		}
 
-		void prepair_block_memory()
+		void prepare_block_memory()
 		{
 			auto& body = buffer_body.get().body();
 			body.data = buffer_memory;
@@ -284,10 +284,12 @@ public:
     {
         return callback.on_recv_block != nullptr;
     }
+
+	/*
     bool is_complete_mode() const
     {
         return callback.on_recv_block == nullptr;
-    }
+    }*/
 
 	int response_status_code()
 	{
@@ -699,19 +701,50 @@ struct http_client : public std::enable_shared_from_this<http_client>
 
 	void async_read_response_body_block()
 	{
-		request->response.prepair_block_memory();
 
-		http::async_read_some(
-			ssl_stream_,
-			buffer,
-			request->response.buffer_body,
-			beast::bind_front_handler(&http_client::on_read_response_block, shared_from_this())
-		);
+		request->response.prepare_block_memory();
+
+		if (is_https_request)
+		{
+			http::async_read_some(
+				ssl_stream_,
+				buffer,
+				request->response.buffer_body,
+				beast::bind_front_handler(&http_client::on_read_response_block, shared_from_this())
+			);
+
+			timer.async_wait_ex(
+				request->config.read_response_chunk_timeout,
+				[this](const boost::system::error_code& ec)
+				{
+					if (ec != boost::asio::error::operation_aborted)
+						ssl_stream_.next_layer().close(); // cancel async_read_some
+				}
+			);
+		}
+		else
+		{
+			http::async_read_some(
+				tcp_stream_,
+				buffer,
+				request->response.buffer_body,
+				beast::bind_front_handler(&http_client::on_read_response_block, shared_from_this())
+			);
+
+			timer.async_wait_ex(
+				request->config.read_response_chunk_timeout,
+				[this](const boost::system::error_code& ec)
+				{
+					if (ec != boost::asio::error::operation_aborted)
+						tcp_stream_.close(); // cancel async_read_some
+				}
+			);
+		}
 	}
 
 	void on_read_response_block(beast::error_code ec, std::size_t bytes_transferred)
 	{
-		//timer.cancel();
+		timer.cancel();
 
 		if (ec == boost::asio::error::eof)
 		{
