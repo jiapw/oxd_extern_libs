@@ -143,9 +143,9 @@ int main()
 				},
 
 #if defined(BLOCK_READ)
-				[](const simple::http_context* ctx, uint64_t offset, std::string_view& block)->void
+				[](const simple::http_context* ctx, uint64_t offset, std::string_view& slice)->void
 				{
-					//printf("recv block: offset: %lld, size:%lld \n", offset, block.size());
+					printf("recv block: offset: %lld, size:%lld \n", offset, slice.size());
 				},
 #else
 				nullptr,

@@ -170,7 +170,7 @@ struct http_url
 struct http_context;
 
 using on_http_recv_header_func = std::function<void(const http_context* ctx, int status_code)>;
-using on_http_recv_block_func = std::function<void(const http_context* ctx, uint64_t offset, std::string_view& block)>;
+using on_http_recv_slice_func = std::function<void(const http_context* ctx, uint64_t offset, std::string_view& slice)>;
 using on_http_finish_func = std::function<void(const http_context* ctx, int status_code, const std::string& body)>;
 
 
@@ -181,7 +181,7 @@ protected:
 	struct
 	{
 		on_http_finish_func			on_http_finish;
-		on_http_recv_block_func		on_recv_block;
+		on_http_recv_slice_func		on_recv_slice;
 		on_http_recv_header_func	on_recv_header;
 	} callback;
 public:
@@ -212,20 +212,20 @@ public:
 	struct
 	{
 		uint64_t content_length = 0;
-		uint64_t block_recv_bytes = 0;
+		uint64_t slice_recv_bytes = 0;
 
 		http::response_parser<http::string_body> string_body;
 
 		http::response_parser<http::buffer_body> buffer_body; // it use buffer_memory
 		char buffer_memory[1024 * 10];
 
-		std::string_view block_view()
+		std::string_view slice_view()
 		{
 			auto& body = buffer_body.get().body();
 			return std::string_view(buffer_memory, sizeof(buffer_memory) - body.size);
 		}
 
-		void prepare_block_memory()
+		void prepare_slice_memory()
 		{
 			auto& body = buffer_body.get().body();
 			body.data = buffer_memory;
@@ -237,12 +237,12 @@ public:
 	http_context(
         const std::string& url,
         const on_http_recv_header_func& recv_header_handler = nullptr,
-        const on_http_recv_block_func& recv_block_handler = nullptr,
+        const on_http_recv_slice_func& recv_slice_handler = nullptr,
 		const on_http_finish_func& http_finish_handler = nullptr
     )
 	{
 		callback.on_recv_header = recv_header_handler;
-		callback.on_recv_block = recv_block_handler;
+		callback.on_recv_slice = recv_slice_handler;
 		callback.on_http_finish = http_finish_handler;
 
 		init(url);
@@ -258,7 +258,7 @@ public:
 	bool init(std::string_view method, const std::string& s)
 	{
 		response.content_length = 0;
-		response.block_recv_bytes = 0;
+		response.slice_recv_bytes = 0;
 		response.string_body.body_limit(config.string_body_limit);
 		response.buffer_body.body_limit(std::numeric_limits<std::uint64_t>::max());
 
@@ -280,20 +280,20 @@ public:
 		return true;
 	}
 
-    bool is_block_mode() const
+    bool is_slice_mode() const
     {
-        return callback.on_recv_block != nullptr;
+        return callback.on_recv_slice != nullptr;
     }
 
 	/*
     bool is_complete_mode() const
     {
-        return callback.on_recv_block == nullptr;
+        return callback.on_recv_slice == nullptr;
     }*/
 
 	int response_status_code()
 	{
-		if (is_block_mode())
+		if (is_slice_mode())
 			return response.buffer_body.get().result_int();
 		else
 			return response.string_body.get().result_int();
@@ -302,27 +302,27 @@ public:
 	const std::string& response_body()
 	{
 		static std::string __empty;
-		if (is_block_mode())
+		if (is_slice_mode())
 			return __empty;
 		else
 			return response.string_body.get().body();
 	}
 
-	void callback_on_recv_block(uint64_t offset, std::string_view& block)
+	void callback_on_recv_slice(uint64_t offset, std::string_view& slice)
 	{
-		if (callback.on_recv_block ==nullptr)
+		if (callback.on_recv_slice ==nullptr)
 			return;
 
-		callback.on_recv_block(this, offset, block);
+		callback.on_recv_slice(this, offset, slice);
 	}
 
-	void on_recv_block()
+	void on_recv_slice()
 	{
-		auto block = response.block_view();
+		auto slice = response.slice_view();
 
-		auto offset = response.block_recv_bytes;
-		response.block_recv_bytes += block.size();
-		callback_on_recv_block(offset, block);
+		auto offset = response.slice_recv_bytes;
+		response.slice_recv_bytes += slice.size();
+		callback_on_recv_slice(offset, slice);
 	}
 
 	void call_on_http_finish()
@@ -335,7 +335,7 @@ public:
 
 	void callback_on_recv_header()
 	{
-		if (auto& opt = is_block_mode() ? response.buffer_body.content_length() : response.string_body.content_length())
+		if (auto& opt = is_slice_mode() ? response.buffer_body.content_length() : response.string_body.content_length())
 		{
 			response.content_length = opt.value();
 		}
@@ -574,7 +574,7 @@ struct http_client : public std::enable_shared_from_this<http_client>
 
 		if (is_https_request)
 		{
-			if (request->is_block_mode())
+			if (request->is_slice_mode())
 				http::async_read_header(
 					ssl_stream_,
 					buffer,
@@ -600,7 +600,7 @@ struct http_client : public std::enable_shared_from_this<http_client>
 		}
 		else
 		{
-			if (request->is_block_mode())
+			if (request->is_slice_mode())
 				http::async_read_header(
 					tcp_stream_,
 					buffer,
@@ -637,8 +637,8 @@ struct http_client : public std::enable_shared_from_this<http_client>
 		// TBD
 		request->callback_on_recv_header();
 
-		if (request->is_block_mode())
-			async_read_response_body_block();
+		if (request->is_slice_mode())
+			async_read_response_body_slice();
 		else
 			async_read_response_body();
 	}
@@ -699,10 +699,10 @@ struct http_client : public std::enable_shared_from_this<http_client>
 		return request->finish_in_success();
 	}
 
-	void async_read_response_body_block()
+	void async_read_response_body_slice()
 	{
 
-		request->response.prepare_block_memory();
+		request->response.prepare_slice_memory();
 
 		if (is_https_request)
 		{
@@ -710,7 +710,7 @@ struct http_client : public std::enable_shared_from_this<http_client>
 				ssl_stream_,
 				buffer,
 				request->response.buffer_body,
-				beast::bind_front_handler(&http_client::on_read_response_block, shared_from_this())
+				beast::bind_front_handler(&http_client::on_read_response_slice, shared_from_this())
 			);
 
 			timer.async_wait_ex(
@@ -728,7 +728,7 @@ struct http_client : public std::enable_shared_from_this<http_client>
 				tcp_stream_,
 				buffer,
 				request->response.buffer_body,
-				beast::bind_front_handler(&http_client::on_read_response_block, shared_from_this())
+				beast::bind_front_handler(&http_client::on_read_response_slice, shared_from_this())
 			);
 
 			timer.async_wait_ex(
@@ -742,7 +742,7 @@ struct http_client : public std::enable_shared_from_this<http_client>
 		}
 	}
 
-	void on_read_response_block(beast::error_code ec, std::size_t bytes_transferred)
+	void on_read_response_slice(beast::error_code ec, std::size_t bytes_transferred)
 	{
 		timer.cancel();
 
@@ -752,14 +752,14 @@ struct http_client : public std::enable_shared_from_this<http_client>
 		}
 
 		if (ec)
-			return request->finish_in_failure(ec, "read response block");
+			return request->finish_in_failure(ec, "read response slice");
 
-		request->on_recv_block();
+		request->on_recv_slice();
 
 		if (request->response.buffer_body.is_done())
  			return request->finish_in_success();
 
-		async_read_response_body_block();
+		async_read_response_body_slice();
 	}
 };
 
@@ -819,16 +819,16 @@ struct http_manager
 
 	bool add_task(const std::string& url, 
 		const on_http_recv_header_func& recv_header_handler = nullptr,
-		const on_http_recv_block_func& recv_block_handler = nullptr, 
+		const on_http_recv_slice_func& recv_slice_handler = nullptr, 
 		const on_http_finish_func& http_finish_handler = nullptr
 	)
 	{
-		return post_work_and_wait_result([this, &url, &recv_header_handler, &recv_block_handler, &http_finish_handler]()->bool // because post_work_and_wait_result(), we can capture parameters by reference
+		return post_work_and_wait_result([this, &url, &recv_header_handler, &recv_slice_handler, &http_finish_handler]()->bool // because post_work_and_wait_result(), we can capture parameters by reference
 			{
 				if (clients.count(url))
 					return false;
 
-				auto request = std::make_shared<http_context>(url, recv_header_handler, recv_block_handler, http_finish_handler);
+				auto request = std::make_shared<http_context>(url, recv_header_handler, recv_slice_handler, http_finish_handler);
 				auto client = std::make_shared<http_client>(io_ctx, ssl_ctx);
 				clients[url] = client;
 				this->execute(request);
