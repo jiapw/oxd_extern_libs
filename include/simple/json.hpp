@@ -12,8 +12,17 @@ namespace simple {
 	{
 	public:
 		json() {};
-		json(std::string_view input) { if (!input.empty()) parse(input); }
-
+		json(std::string_view input) 
+		{ 
+			if (!input.empty()) 
+				parse(input); 
+		}
+		json(const char* data, size_t len) 
+		{ 
+			std::string_view input = std::string_view(data, len);
+			if (!input.empty()) 
+				parse(input);
+		}
 		json& operator=(const nlohmann::json& other)
 		{
 			*(nlohmann::json*)this = other;
@@ -87,6 +96,10 @@ namespace simple {
 		static json& from_nlohmann_json(nlohmann::json& j)
 		{
 			return *(json*)&j;
+		}
+		nlohmann::json& to_nlohmann_json()
+		{
+			return *(nlohmann::json*)this;
 		}
 	};
 
