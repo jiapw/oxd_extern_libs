@@ -335,7 +335,8 @@ public:
 
 	void callback_on_recv_header()
 	{
-		if (auto& opt = is_slice_mode() ? response.buffer_body.content_length() : response.string_body.content_length())
+		auto opt = is_slice_mode() ? response.buffer_body.content_length() : response.string_body.content_length();
+		if (opt)
 		{
 			response.content_length = opt.value();
 		}
