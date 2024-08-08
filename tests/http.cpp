@@ -16,7 +16,17 @@ void test_http_tools()
 
 	{
 		std::string r;
-		simple::http_tools::sync_http_post("https://echo.free.beeceptor.com", { {"name_1","value_1"}, {"name_2","file.name","0123456789"}}, r);
+		simple::http_tools::sync_http_post(
+			"https://echo.free.beeceptor.com", 
+			{ 
+				{"name_1","value_1"}, 
+				{"name_2","file.name","0123456789"},
+				{"name_3","callback",[](std::string& buf)->void{
+					buf = "\0\1\2\3\4\5zbxdefghijklmnopqrstuvwxyz\5\4\3\2\1\0";
+				}}
+			}, 
+			r
+		);
 		printf("%s\n\n", r.c_str());
 	}
 }

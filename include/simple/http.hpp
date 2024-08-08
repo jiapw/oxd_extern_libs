@@ -582,7 +582,16 @@ struct http_client : public std::enable_shared_from_this<http_client>
 				else 
 					body << "Content-Disposition: form-data; name=\"" << it.name << "\"\r\n\r\n";
 				
-				body << it.value << "\r\n";
+				if (it.get_body)
+				{
+					std::string buf;
+					it.get_body(buf);
+					body << buf << "\r\n";
+				}
+				else
+				{ 
+					body << it.value << "\r\n";
+				}
 			}
 
 			body << "--" << boundary << "--\r\n";
