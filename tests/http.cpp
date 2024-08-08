@@ -16,7 +16,7 @@ void test_http_tools()
 
 	{
 		std::string r;
-		simple::http_tools::sync_http_post("https://echo.free.beeceptor.com", {}, r);
+		simple::http_tools::sync_http_post("https://echo.free.beeceptor.com", { {"name_1","value_1"}, {"name_2","file.name","0123456789"}}, r);
 		printf("%s\n\n", r.c_str());
 	}
 }

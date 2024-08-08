@@ -180,7 +180,7 @@ struct multipart_body_item
 
 	std::string name;	// NOT empty !
 	std::string value;
-	std::string content_length = 0;
+	//std::string content_length = 0;
 	std::string content_type = "";	// skip if empty
 
 	std::string file_name;
@@ -564,6 +564,34 @@ struct http_client : public std::enable_shared_from_this<http_client>
 
 		if (ec)
 			return http_ctx->finish_in_failure(ec, "handshake");
+
+		if (http_ctx->request.method_string() == "POST")
+		{
+			std::string boundary = "----WebKitFormBoundary7MA4YWxkTrZu0gW";
+			std::stringstream body;
+
+			for (auto& it : http_ctx->post_data)
+			{
+				body << "--" << boundary << "\r\n";
+
+				if (it.file_name.size())
+				{
+					body << "Content-Disposition: form-data; name=\"" << it.name << "\"; filename=\"" << it.file_name << "\"\r\n";
+					body << "Content-Type: application/octet-stream\r\n\r\n";
+				}
+				else 
+					body << "Content-Disposition: form-data; name=\"" << it.name << "\"\r\n\r\n";
+				
+				body << it.value << "\r\n";
+			}
+
+			body << "--" << boundary << "--\r\n";
+
+			http_ctx->request.set(http::field::content_type, "multipart/form-data; boundary=" + boundary);
+			http_ctx->request.body() = body.str();
+			http_ctx->request.prepare_payload();
+		}
+
 
 		if (is_https_request)
 		{
