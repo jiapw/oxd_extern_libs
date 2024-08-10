@@ -222,7 +222,7 @@ struct multipart_body_item
 	}
 };
 
-
+using shared_ptr_http_context = std::shared_ptr<http_context>;
 struct http_context : public std::enable_shared_from_this<http_context>
 {
 
@@ -894,14 +894,15 @@ struct http_manager
 	}
 
 	template<typename WorkHandler>
-	auto post_work_and_wait_result(WorkHandler handler)
+	auto thread_safe(WorkHandler handler)
 	{
 		auto f = io_ctx.post(boost::asio::use_future(handler));
 		f.wait();
 		return f.get();
 	}
 	
-	bool add_task(const std::string& url, 
+	std::shared_ptr<http_context> create_http_and_execute(
+		const std::string& url,
 		const http_header_function& recv_header_handler = nullptr,
 		const http_slice_function& recv_slice_handler = nullptr, 
 		const http_finish_function& http_finish_handler = nullptr
@@ -909,10 +910,10 @@ struct http_manager
 	{
 		auto req = http_context::create(url, recv_header_handler, recv_slice_handler, http_finish_handler);
 		if (req->finished)
-			return false;
+			return nullptr;
 
 		this->execute(req);
-		return true;
+		return req->shared_from_this();
 	}
 
 	void execute(std::shared_ptr<http_context> req)
