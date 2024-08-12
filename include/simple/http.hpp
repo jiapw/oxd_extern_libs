@@ -14,6 +14,7 @@
 #include <boost/asio.hpp>
 #include <boost/beast.hpp>
 #include <boost/beast/ssl.hpp>
+#include <boost/format.hpp>
 
 /*
 
@@ -270,32 +271,34 @@ public:
 	volatile bool finished = false;
 
 	beast::error_code my_error_code;
-	
+
 	std::vector<multipart_body_item> post_data;
 		
 	http_url request_url;
+	std::string request_method;
+	int request_from = 0;
 
 	http::request<http::string_body> request;
 
-	struct
+	struct http_response
 	{
 		uint64_t content_length = 0;
 		uint64_t slice_recv_bytes = 0;
 
-		http::response_parser<http::string_body> string_body;
+		std::shared_ptr<http::response_parser<http::string_body>> string_body;
 
-		http::response_parser<http::buffer_body> buffer_body; // it use buffer_memory
+		std::shared_ptr<http::response_parser<http::buffer_body>> buffer_body; // it use buffer_memory
 		char buffer_memory[1024 * 10];
 
 		std::string_view slice_view()
 		{
-			auto& body = buffer_body.get().body();
+			auto& body = buffer_body->get().body();
 			return std::string_view(buffer_memory, sizeof(buffer_memory) - body.size);
 		}
 
 		void prepare_slice_memory()
 		{
-			auto& body = buffer_body.get().body();
+			auto& body = buffer_body->get().body();
 			body.data = buffer_memory;
 			body.size = sizeof(buffer_memory);
 		}
@@ -335,33 +338,59 @@ public:
 	{
 		return;
 	}
+	bool re_init()
+	{
+		return init("", nullptr);
+	}
 	bool init(const std::string& url)
 	{
-		return init("GET", url);
+		return init("GET", &url);
 	}
-	bool init(std::string_view method, const std::string& url)
+	bool init(std::string_view method, const std::string* url) // url == nullptr, means reuse old url
 	{
-		response.content_length = 0;
-		response.slice_recv_bytes = 0;
-		response.string_body.body_limit(config.string_body_limit);
-		response.buffer_body.body_limit(std::numeric_limits<std::uint64_t>::max());
-
 		finished = false;
-		request.clear();
 		my_error_code.clear();
 
-		if (!request_url.parse(url))
+		response.string_body = std::make_shared<http::response_parser<http::string_body>>();
+		response.buffer_body = std::make_shared<http::response_parser<http::buffer_body>>();
+
+		response.content_length = 0;
+		response.slice_recv_bytes = 0;
+		response.string_body->body_limit(config.string_body_limit);
+		response.buffer_body->body_limit(std::numeric_limits<std::uint64_t>::max());
+
+		if (url)
 		{
-			finish_in_failure(http_invalid_url, "parse url");
-			return false;
+			if (!request_url.parse(*url))
+			{
+				finish_in_failure(http_invalid_url, "parse url");
+				return false;
+			}
+		}
+		else
+		{
+			// use old request_url
 		}
 
-		request.method_string(method);
+		if (!method.empty())
+		{
+			request_method = method;
+		}
+
+		request = http::request<http::string_body>();
+
+		request.method_string(request_method);
 		request.version(config.version);
 		request.target(request_url.target());
 		request.set(http::field::host, request_url.host);
 
 		return true;
+	}
+	void request_set_range(int from)
+	{
+		request_from = from;
+		std::string range_str = (boost::format("bytes=%d-") % from).str();
+		request.set(http::field::range, range_str);
 	}
 
     bool is_slice_mode() const
@@ -369,12 +398,17 @@ public:
         return callback.on_recv_slice != nullptr;
     }
 
+	bool finished_in_success() const
+	{
+		return !my_error_code.failed();
+	}
+
 	int response_status_code()
 	{
 		if (is_slice_mode())
-			return response.buffer_body.get().result_int();
+			return response.buffer_body->get().result_int();
 		else
-			return response.string_body.get().result_int();
+			return response.string_body->get().result_int();
 	}
 
 	std::string& response_body()
@@ -383,7 +417,7 @@ public:
 		if (is_slice_mode())
 			return __empty;
 		else
-			return response.string_body.get().body();
+			return response.string_body->get().body();
 	}
 
 	void on_recv_slice()
@@ -392,17 +426,18 @@ public:
 
 		auto offset = response.slice_recv_bytes;
 		response.slice_recv_bytes += slice.size();
-		callback.recv_slice(this, offset, slice);
+		callback.recv_slice(this, request_from + offset, slice);
 	}
 
 	void on_http_finish()
 	{
+		finished = true;
 		callback.http_finish(this, response_status_code(), response_body());
 	}
 
 	void on_recv_header()
 	{
-		auto opt = is_slice_mode() ? response.buffer_body.content_length() : response.string_body.content_length();
+		auto opt = is_slice_mode() ? response.buffer_body->content_length() : response.string_body->content_length();
 		if (opt)
 		{
 			response.content_length = opt.value();
@@ -413,18 +448,14 @@ public:
 
 	void finish_in_failure(const beast::error_code& ec, const std::string& info)
 	{
-		on_http_finish();
-
-		finished = true;
 		my_error_code = ec;
+		on_http_finish();
 		return fail(ec, info.c_str());
 	}
 
 	void finish_in_success()
 	{
 		on_http_finish();
-
-		finished = true;
 	}
 
 };
@@ -670,14 +701,14 @@ struct http_client : public std::enable_shared_from_this<http_client>
 				http::async_read_header(
 					ssl_stream_,
 					buffer,
-					http_ctx->response.buffer_body,
+					*http_ctx->response.buffer_body,
 					beast::bind_front_handler(&http_client::on_read_response_header, shared_from_this())
 				);
 			else
 				http::async_read_header(
 					ssl_stream_,
 					buffer,
-					http_ctx->response.string_body,
+					*http_ctx->response.string_body,
 					beast::bind_front_handler(&http_client::on_read_response_header, shared_from_this())
 				);
 
@@ -696,14 +727,14 @@ struct http_client : public std::enable_shared_from_this<http_client>
 				http::async_read_header(
 					tcp_stream_,
 					buffer,
-					http_ctx->response.buffer_body,
+					*http_ctx->response.buffer_body,
 					beast::bind_front_handler(&http_client::on_read_response_header, shared_from_this())
 				);
 			else
 				http::async_read_header(
 					tcp_stream_,
 					buffer,
-					http_ctx->response.string_body,
+					*http_ctx->response.string_body,
 					beast::bind_front_handler(&http_client::on_read_response_header, shared_from_this())
 				);
 
@@ -743,7 +774,7 @@ struct http_client : public std::enable_shared_from_this<http_client>
 			http::async_read(
 				ssl_stream_,
 				buffer,
-				http_ctx->response.string_body,
+				*http_ctx->response.string_body,
 				beast::bind_front_handler(&http_client::on_read_response_body, shared_from_this())
 			);
 
@@ -761,7 +792,7 @@ struct http_client : public std::enable_shared_from_this<http_client>
 			http::async_read(
 				tcp_stream_,
 				buffer,
-				http_ctx->response.string_body,
+				*http_ctx->response.string_body,
 				beast::bind_front_handler(&http_client::on_read_response_body, shared_from_this())
 			);
 
@@ -786,7 +817,7 @@ struct http_client : public std::enable_shared_from_this<http_client>
 		if (ec)
 			return http_ctx->finish_in_failure(ec, "read response body");
 
-		std::cout << "url:" << http_ctx->request_url.host << ", size:" << http_ctx->response.string_body.get().body().size() << "\n";
+		std::cout << "url:" << http_ctx->request_url.host << ", size:" << http_ctx->response.string_body->get().body().size() << "\n";
 
 		return http_ctx->finish_in_success();
 	}
@@ -801,7 +832,7 @@ struct http_client : public std::enable_shared_from_this<http_client>
 			http::async_read_some(
 				ssl_stream_,
 				buffer,
-				http_ctx->response.buffer_body,
+				*http_ctx->response.buffer_body,
 				beast::bind_front_handler(&http_client::on_read_response_slice, shared_from_this())
 			);
 
@@ -819,7 +850,7 @@ struct http_client : public std::enable_shared_from_this<http_client>
 			http::async_read_some(
 				tcp_stream_,
 				buffer,
-				http_ctx->response.buffer_body,
+				*http_ctx->response.buffer_body,
 				beast::bind_front_handler(&http_client::on_read_response_slice, shared_from_this())
 			);
 
@@ -840,7 +871,7 @@ struct http_client : public std::enable_shared_from_this<http_client>
 
 		if (ec == boost::asio::error::eof)
 		{
-			return http_ctx->finish_in_success();
+			return http_ctx->finish_in_success(); // TODO?
 		}
 
 		if (ec)
@@ -848,7 +879,7 @@ struct http_client : public std::enable_shared_from_this<http_client>
 
 		http_ctx->on_recv_slice();
 
-		if (http_ctx->response.buffer_body.is_done())
+		if (http_ctx->response.buffer_body->is_done())
  			return http_ctx->finish_in_success();
 
 		async_read_response_body_slice();
@@ -881,6 +912,8 @@ struct io_context_work_thread
 	}
 };
 
+using timer_callback_function = std::function<void(const boost::system::error_code& ec)>;
+
 struct http_manager
 {
 	void start_work_thread()
@@ -900,6 +933,33 @@ struct http_manager
 		f.wait();
 		return f.get();
 	}
+
+	void _thread_timer_func(const boost::system::error_code& ec, int64_t timeout_ms, timer_callback_function f, std::shared_ptr<steady_timer_ex> timer)
+	{
+		if (ec == asio::error::operation_aborted) // cancel
+			return;
+
+		f(ec);
+
+		timer->expires_after(std::chrono::milliseconds(timeout_ms));
+		timer->async_wait([this, timeout_ms, f, timer](const boost::system::error_code& ec){
+			_thread_timer_func(ec, timeout_ms, f, timer);
+		});
+	}
+
+	std::shared_ptr<steady_timer_ex> thread_timer(int64_t timeout_ms, timer_callback_function f)
+	{
+		std::shared_ptr<steady_timer_ex> timer = std::make_shared<steady_timer_ex>(io_ctx);
+
+		timer->expires_after(std::chrono::milliseconds(timeout_ms));
+
+		timer->async_wait([this, timeout_ms, f, timer](const boost::system::error_code& ec) {
+			_thread_timer_func(ec, timeout_ms, f, timer);
+		});
+
+		return timer;
+	}
+
 	
 	std::shared_ptr<http_context> create_http_and_execute(
 		const std::string& url,
@@ -939,9 +999,9 @@ struct http_tools
 		client->execute(request);
 		io_ctx.run();
 
-		if (request->response.string_body.get().result_int() == 200)
+		if (request->response.string_body->get().result_int() == 200)
 		{
-			out = std::move(request->response.string_body.get().body());
+			out = std::move(request->response.string_body->get().body());
 			return true;
 		}
 		return false;
@@ -956,7 +1016,7 @@ struct http_tools
 	static bool sync_http_post(const std::string& url, const std::vector<multipart_body_item>& items, std::string& out)
 	{
 		auto request = http_context::create("");
-		request->init("POST", url);
+		request->init("POST", &url);
 		request->post_data = items;
 
 		return sync_http_op(request, out);
