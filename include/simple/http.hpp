@@ -32,6 +32,28 @@ namespace beast = boost::beast;
 namespace ssl	= boost::asio::ssl;
 namespace http	= boost::beast::http;
 
+/*
+template<int N>
+inline bool http_status_match(int status_code)
+{
+	return (status_code/100)==N;
+}
+*/
+
+template<int N>
+struct http_status_match
+{
+	bool operator()(int status_code) const {
+		return (status_code / 100) == N;
+	}
+};
+
+inline http_status_match<1> http_status_1xx;
+inline http_status_match<2> http_status_2xx;
+inline http_status_match<3> http_status_3xx;
+inline http_status_match<4> http_status_4xx;
+inline http_status_match<5> http_status_5xx;
+
 
 inline void fail(beast::error_code ec, char const* what)
 {
@@ -342,6 +364,10 @@ public:
 	{
 		return init("", nullptr);
 	}
+	bool re_init(const std::string& url)
+	{
+		return init("", &url);
+	}
 	bool init(const std::string& url)
 	{
 		return init("GET", &url);
@@ -418,6 +444,25 @@ public:
 			return __empty;
 		else
 			return response.string_body->get().body();
+	}
+
+	std::string response_location()
+	{
+		if (is_slice_mode())
+		{
+			auto& rsp = response.buffer_body->get();
+			auto location = rsp.find(beast::http::field::location);
+			if (location != rsp.end())
+				return location->value();
+		}
+		else
+		{
+			auto& rsp = response.string_body->get();
+			auto location = rsp.find(beast::http::field::location);
+			if (location != rsp.end())
+				return location->value();
+		}
+		return "";
 	}
 
 	void on_recv_slice()

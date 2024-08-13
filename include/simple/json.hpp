@@ -40,23 +40,25 @@ namespace simple {
 		template<typename T>
 		bool get_kv(std::string_view key, T& out)
 		{
-			if (!contains(key))
-				return false;
-
-			auto& v = this->operator[](key);
-
-			static_assert( 
+			static_assert(
 				(
 					std::is_same_v<T, bool> ||
 					std::is_same_v<T, int64_t> ||
 					std::is_same_v<T, uint64_t> ||
 					std::is_same_v<T, float> ||
 					std::is_same_v<T, std::string> ||
-					std::is_same_v<T, nlohmann::json> || 
+					std::is_same_v<T, nlohmann::json> ||
 					std::is_same_v<T, simple::json>
 				),
 				"unsupported value type!"
 			);
+
+            auto& v = contains(key)
+                ? this->operator[](key)
+                : this->operator[](nlohmann::json::json_pointer(std::string(key)));
+
+			if (v.is_null())
+				return false;
 
 			if constexpr(std::is_same_v<T, std::string>)
 			{
