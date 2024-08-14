@@ -248,8 +248,6 @@ struct multipart_body_item
 using shared_ptr_http_context = std::shared_ptr<http_context>;
 struct http_context : public std::enable_shared_from_this<http_context>
 {
-
-protected:
 	struct
 	{
 		http_header_function	on_recv_header;
@@ -274,7 +272,6 @@ protected:
 
 	} callback;
 
-public:
 	struct
 	{
 		uint16_t	resolve_timeout = 5 * 1000;
@@ -1035,16 +1032,26 @@ protected:
 
 struct http_tools
 {
-	static bool sync_http_op(std::shared_ptr<http_context> request, std::string& out)
+	static bool sync_http_op(std::shared_ptr<http_context> request, std::string& out, int64_t timeout_ms)
 	{
 		asio::io_context io_ctx;
 		ssl::context ssl_ctx{ ssl::context::tlsv13_client };
+		steady_timer_ex timer{ io_ctx };
+
+		request->callback.on_http_finish = [&timer](const http_context* ctx, int status_code, const std::string& body) {
+			timer.cancel();
+		};
 
 		auto client = std::make_shared<http_client>(io_ctx, ssl_ctx);
 		client->execute(request);
+
+		timer.async_wait_ex(timeout_ms, [&io_ctx](const boost::system::error_code& ec){
+			io_ctx.stop();
+		});
+
 		io_ctx.run();
 
-		if (request->response.string_body->get().result_int() == 200)
+		if (request->response.string_body->get().result_int() == 200 && request->response.string_body->is_done())
 		{
 			out = std::move(request->response.string_body->get().body());
 			return true;
@@ -1052,25 +1059,25 @@ struct http_tools
 		return false;
 	}
 
-	static bool sync_http_get(const std::string& url, std::string& out)
+	static bool sync_http_get(const std::string& url, std::string& out, int64_t timeout_ms)
 	{
 		auto request = http_context::create(url);
-		return sync_http_op(request, out);
+		return sync_http_op(request, out, timeout_ms);
 	}
 
-	static bool sync_http_post(const std::string& url, const std::vector<multipart_body_item>& items, std::string& out)
+	static bool sync_http_post(const std::string& url, const std::vector<multipart_body_item>& items, std::string& out, int64_t timeout_ms)
 	{
 		auto request = http_context::create("");
 		request->init("POST", &url);
 		request->post_data = items;
 
-		return sync_http_op(request, out);
+		return sync_http_op(request, out, timeout_ms);
 	}
 
-	static std::optional<std::string> sync_http_get(const std::string& url)
+	static std::optional<std::string> sync_http_get(const std::string& url, int64_t timeout_ms)
 	{
 		std::string res;
-		if (sync_http_get(url, res))
+		if (sync_http_get(url, res, timeout_ms))
 			return std::optional<std::string>(std::move(res));
 		else
 			return std::nullopt;
