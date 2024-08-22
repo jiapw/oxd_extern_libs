@@ -38,7 +38,7 @@ namespace simple {
 			return !is_discarded();
 		}
 		template<typename T>
-		bool get_kv(std::string_view key, T& out)
+		bool get_kv(std::string_view key, T& out) const
 		{
 			static_assert(
 				(
@@ -53,9 +53,16 @@ namespace simple {
 				"unsupported value type!"
 			);
 
-            auto& v = contains(key)
-                ? this->operator[](key)
-                : this->operator[](nlohmann::json::json_pointer(std::string(key)));
+			nlohmann::json v;
+
+			if (contains(key))
+				v = this->operator[](key);
+			else 
+			{
+				auto jp = nlohmann::json::json_pointer(std::string(key));
+				if (contains(jp))
+					v = this->operator[](jp);
+			}
 
 			if (v.is_null())
 				return false;
