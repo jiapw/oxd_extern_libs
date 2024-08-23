@@ -1024,6 +1024,11 @@ struct http_manager
 		client->execute(req);
 	}
 
+	void stop()
+	{
+		io_ctx.stop();
+	}
+
 protected:
 	asio::io_context io_ctx;
 	ssl::context ssl_ctx{ ssl::context::tlsv13_client };
