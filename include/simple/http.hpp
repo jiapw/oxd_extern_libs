@@ -930,9 +930,9 @@ struct http_client : public std::enable_shared_from_this<http_client>
 
 struct io_context_work_thread 
 {
-	std::thread thread;
 	asio::io_context& io_ctx;
 	boost::asio::executor_work_guard<boost::asio::io_context::executor_type> work_guard;
+    std::thread thread;
 	io_context_work_thread(asio::io_context& io_c)
 		: io_ctx(io_c)
 		, work_guard(boost::asio::make_work_guard(io_c))
