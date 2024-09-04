@@ -8,7 +8,7 @@ const std::string url = "https://video1.2ndu.com/16MB/4x4_0.bin";
 
 void test_http_tools()
 {
-	if(0)
+	if(1)
 	{
 		auto r = simple::http_tools::sync_http_get("https://www.sina.com.cn", 10*1000);
 		assert(r);
@@ -34,16 +34,6 @@ void test_http_tools()
 	}
 }
 
-namespace simple
-{
-	void http_client::finish_in_success()
-	{
-		http_manager->recyle_http_client(this->shared_from_this());
-		return http_ctx->finish_in_success();
-	}
-}
-
-
 void test_http_manager()
 {
 	
@@ -51,10 +41,10 @@ void test_http_manager()
 	http_mngr.start_work_thread();
 
 	std::vector<std::string> urls = {
-		"https://video1.2ndu.com/16MB/4x4_0.bin",
+		"https://video1.21ndu.com/16MB/4x4_0.bin",
 		"https://video1.2ndu.com/16MB/4x4_1.bin",
-		"https://video1.2ndu.com/16MB/4x4_2.bin",
-		"https://video1.2ndu.com/16MB/4x4_4.bin"
+		"https://video1.2ndu.com/16MB/4x4_4.bin",
+		"https://video1.2ndu.com/16MB/4x4_2.bin"
 	};
 
 	for (auto i =0 ;i<4;i++)
@@ -104,8 +94,8 @@ void test_http_manager()
 
 int main()
 {
-	//test_http_tools();
-	test_http_manager();
+	test_http_tools();
+	//test_http_manager();
 
 	return 0;
 }
