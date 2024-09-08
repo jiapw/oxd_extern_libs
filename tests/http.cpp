@@ -54,8 +54,8 @@ void test_http_manager()
 		printf("\nstart: %lld \n", simple::ms::now());
 		
 		{
-			auto  http_req = std::make_shared<simple::http_context>(urls[i],
-				[](const simple::http_context* ctx, int status_code)->void
+			auto  http_req = std::make_shared<simple::HttpContext>(urls[i],
+				[](const simple::HttpContext* ctx, int status_code)->void
 				{
 					printf("recv header:\n status code:%d \n content length:%lld \n", status_code, ctx->response.content_length);
 				},
@@ -69,7 +69,7 @@ void test_http_manager()
 				nullptr,
 #endif
 
-				[](const simple::http_context* ctx, int status_code, const std::string& body)->void
+				[](const simple::HttpContext* ctx, int status_code, const std::string& body)->void
 				{
 					printf("http finish:\n status code:%d, total size:%lld \n", status_code, ctx->response.content_length);
 				}
