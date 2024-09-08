@@ -16,14 +16,10 @@
 #include <boost/beast/ssl.hpp>
 #include <boost/format.hpp>
 
-/*
-
-Due to the use of asynchronous operations, it is necessary to ensure that the object must exist at the time of the callback. 
-Please use smart pointer of the object. 
-
-Do NOT use the object directly !!!
-
-*/
+//Due to the use of asynchronous operations, it is necessary to ensure that the object must exist at the time of the callback. 
+//Please use smart pointer of the object. 
+//
+//DO NOT use the object directly !!!
 
 namespace simple{
 
@@ -32,28 +28,17 @@ namespace beast = boost::beast;
 namespace ssl	= boost::asio::ssl;
 namespace http	= boost::beast::http;
 
-/*
 template<int N>
-inline bool http_status_match(int status_code)
+bool http_status_match(int status_code)
 {
-	return (status_code/100)==N;
-}
-*/
-
-template<int N>
-struct http_status_match
-{
-	bool operator()(int status_code) const {
-		return (status_code / 100) == N;
-	}
+	return (status_code / 100) == N;
 };
 
-inline http_status_match<1> http_status_1xx;
-inline http_status_match<2> http_status_2xx;
-inline http_status_match<3> http_status_3xx;
-inline http_status_match<4> http_status_4xx;
-inline http_status_match<5> http_status_5xx;
-
+using is_http_status_1xx = decltype(http_status_match<1>);
+using is_http_status_2xx = decltype(http_status_match<2>);
+using is_http_status_3xx = decltype(http_status_match<3>);
+using is_http_status_4xx = decltype(http_status_match<4>);
+using is_http_status_5xx = decltype(http_status_match<5>);
 
 inline void fail(beast::error_code ec, char const* what)
 {
@@ -66,68 +51,76 @@ inline bool fail(char const* message, char const* what)
 	return false;
 }
 
-// Enum to define your custom error codes
-enum class http_error_code {
-	invalid_url = 0x1001,
-	invalid_request,
+enum class HttpErrorCode {
+	INVALID_URL	= 0x1001,
+	INVALID_REQUEST,
 
-	timeout_resolve = 0x2001,
-	timeout_connect,
-	timeout_ssl_handshake,
-	timeout_write_request,
-	timeout_read_response_body,
-	timeout_read_response_slice
+	TIMEOUT_RESOLVE = 0X2001,
+	TIMEOUT_CONNECT,
+	TIMEOUT_SSL_HANDSHAKE,	// https only
+	TIMEOUT_WRITE_REQUEST,
+	TIMEOUT_READ_RESPONSE_HEADER,
+	TIMEOUT_READ_RESPONSE_BODY,
+	TIMEOUT_READ_RESPONSE_SLICE	
 };
 
-class http_error_category : public boost::system::error_category
+using error_code = boost::system::error_code;
+
+class HttpErrorCategory : public boost::system::error_category
 {
 public:
 	const char* name() const noexcept override
 	{
-		return "simple_http_error_category";
+		return "simple::HttpErrorCategory";
 	}
 
 	std::string message(int ev) const override
 	{
-		switch (static_cast<http_error_code>(ev))
+		switch (static_cast<HttpErrorCode>(ev))
 		{
-		case http_error_code::invalid_url:
+		case HttpErrorCode::INVALID_URL:
 			return "url is invalid";
-		case http_error_code::invalid_request:
+		case HttpErrorCode::INVALID_REQUEST:
 			return "request is invalid";
-		case http_error_code::timeout_resolve:
+		case HttpErrorCode::TIMEOUT_RESOLVE:
 			return "resolve timeout";
-		case http_error_code::timeout_connect:
+		case HttpErrorCode::TIMEOUT_CONNECT:
 			return "connect timeout";
-		case http_error_code::timeout_ssl_handshake:
+		case HttpErrorCode::TIMEOUT_SSL_HANDSHAKE:
 			return "ssl handshake timeout";
-		case http_error_code::timeout_write_request:
+		case HttpErrorCode::TIMEOUT_WRITE_REQUEST:
 			return "write request timeout";
-		case http_error_code::timeout_read_response_body:
+		case HttpErrorCode::TIMEOUT_READ_RESPONSE_HEADER:
+			return "read response header";
+		case HttpErrorCode::TIMEOUT_READ_RESPONSE_BODY:
 			return "read response body";
-		case http_error_code::timeout_read_response_slice:
+		case HttpErrorCode::TIMEOUT_READ_RESPONSE_SLICE:
 			return "read response slice";
 		default:
 			return "unknown error ";
 		}
 	}
 
-	static beast::error_code make_error_code(http_error_code e) {
-		static http_error_category category;
-		return beast::error_code(static_cast<int>(e), category);
+	static const error_code make_error_code(HttpErrorCode e)
+	{
+		static HttpErrorCategory _;
+		return error_code(static_cast<int>(e), _);
 	}
 };
 
-inline beast::error_code http_invalid_url = http_error_category::make_error_code(http_error_code::invalid_url);
-inline beast::error_code http_invalid_request = http_error_category::make_error_code(http_error_code::invalid_request);
-inline beast::error_code http_timeout_resolve = http_error_category::make_error_code(http_error_code::timeout_resolve);
-inline beast::error_code http_timeout_connect = http_error_category::make_error_code(http_error_code::timeout_connect);
-inline beast::error_code http_timeout_ssl_handshake = http_error_category::make_error_code(http_error_code::timeout_ssl_handshake);
-inline beast::error_code http_timeout_read_response_body = http_error_category::make_error_code(http_error_code::timeout_read_response_body);
-inline beast::error_code http_timeout_read_response_slice = http_error_category::make_error_code(http_error_code::timeout_read_response_slice);
+
+const error_code INVALID_URL					= HttpErrorCategory::make_error_code(HttpErrorCode::INVALID_URL);
+const error_code INVALID_REQUEST				= HttpErrorCategory::make_error_code(HttpErrorCode::INVALID_REQUEST);
+const error_code TIMEOUT_RESOLVE				= HttpErrorCategory::make_error_code(HttpErrorCode::TIMEOUT_RESOLVE);
+const error_code TIMEOUT_CONNECT				= HttpErrorCategory::make_error_code(HttpErrorCode::TIMEOUT_CONNECT);
+const error_code TIMEOUT_SSL_HANDSHAKE			= HttpErrorCategory::make_error_code(HttpErrorCode::TIMEOUT_SSL_HANDSHAKE);
+const error_code TIMEOUT_WRITE_REQUEST			= HttpErrorCategory::make_error_code(HttpErrorCode::TIMEOUT_WRITE_REQUEST);
+const error_code TIMEOUT_READ_RESPONSE_HEADER	= HttpErrorCategory::make_error_code(HttpErrorCode::TIMEOUT_READ_RESPONSE_HEADER);
+const error_code TIMEOUT_READ_RESPONSE_BODY		= HttpErrorCategory::make_error_code(HttpErrorCode::TIMEOUT_READ_RESPONSE_BODY);
+const error_code TIMEOUT_READ_RESPONSE_SLICE	= HttpErrorCategory::make_error_code(HttpErrorCode::TIMEOUT_READ_RESPONSE_SLICE);
 
 
-struct http_url
+struct Url
 {
 	std::string scheme;
 	std::string host;
@@ -145,7 +138,7 @@ struct http_url
 		query.clear();
 		fragment.clear();
 	}
-	bool valid()
+	bool is_valid()
 	{
 		return (
 			scheme.length() &&
@@ -154,7 +147,7 @@ struct http_url
 			path.length()
 		);
 	}
-	std::string target() const
+	std::string path_to_resource() const
 	{
 		if (query.length())
 			return path + "?" + query;
@@ -162,14 +155,22 @@ struct http_url
 			return path;
 	}
 
-    std::string connection() const
+    std::string endpoint() const
     {
         return scheme + "://" + host + ":" + port;
     }
 
-	std::string full_url() const
+	std::string to_url() const
 	{
-		return connection() + target();
+		return endpoint() + path_to_resource();
+	}
+
+	std::string to_uri() const
+	{
+		if (fragment.length())
+			return endpoint() + path_to_resource() + "#" + fragment;
+		else
+			return endpoint() + path_to_resource();
 	}
 
 	bool parse(const std::string& url)
@@ -177,7 +178,7 @@ struct http_url
 		return parse(url, *this);
 	}
 
-	static bool parse(const std::string& url, http_url& out)
+	static bool parse(const std::string& url, Url& out)
 	{
 		std::regex url_regex(R"(([^:]+):\/\/([^\/:]+)(?::(\d+))?([^?#]*)(?:\?([^#]*))?(?:#(.*))?)");
 		std::smatch url_match;
@@ -197,6 +198,10 @@ struct http_url
 					out.port = "443";
 				else if (out.scheme == "http")
 					out.port = "80";
+				else
+				{
+					assert(0);
+				}
 			}
 
 			out.path = url_match[4].str();
@@ -215,12 +220,12 @@ struct http_url
 	}
 };
 
-struct http_context;
+struct HttpContext;
 struct http_manager;
 
-using http_header_function	= std::function<void(const http_context* ctx, int status_code)>;
-using http_slice_function	= std::function<void(const http_context* ctx, uint64_t offset, std::string_view& slice)>;
-using http_finish_function	= std::function<void(const http_context* ctx, int status_code, const std::string& body)>;
+using http_header_function	= std::function<void(const HttpContext* ctx, int status_code)>;
+using http_slice_function	= std::function<void(const HttpContext* ctx, uint64_t offset, std::string_view& slice)>;
+using http_finish_function	= std::function<void(const HttpContext* ctx, int status_code, const std::string& body)>;
 
 using get_body_function = std::function<bool(std::string& buf)>;
 
@@ -256,8 +261,7 @@ struct multipart_body_item
 	}
 };
 
-using shared_ptr_http_context = std::shared_ptr<http_context>;
-struct http_context : public std::enable_shared_from_this<http_context>
+struct HttpContext : public std::enable_shared_from_this<HttpContext>
 {
 	struct
 	{
@@ -265,17 +269,17 @@ struct http_context : public std::enable_shared_from_this<http_context>
 		http_slice_function		on_recv_slice;
 		http_finish_function	on_http_finish;
 
-		void recv_header(const http_context* ctx, int status_code)
+		void recv_header(const HttpContext* ctx, int status_code)
 		{
 			if (on_recv_header)
 				on_recv_header(ctx, status_code);
 		}
-		void recv_slice(const http_context* ctx, uint64_t offset, std::string_view& slice)
+		void recv_slice(const HttpContext* ctx, uint64_t offset, std::string_view& slice)
 		{
 			if (on_recv_slice)
 				on_recv_slice(ctx, offset, slice);
 		}
-		void http_finish(const http_context* ctx, int status_code, const std::string& body)
+		void http_finish(const HttpContext* ctx, int status_code, const std::string& body)
 		{
 			if (on_http_finish)
 				on_http_finish(ctx, status_code, body);
@@ -304,7 +308,7 @@ struct http_context : public std::enable_shared_from_this<http_context>
 
 	std::vector<multipart_body_item> post_data;
 		
-	http_url request_url;
+	Url request_url;
 	std::string request_method;
 	int request_from = 0;
 
@@ -335,9 +339,9 @@ struct http_context : public std::enable_shared_from_this<http_context>
 
 	} response;
 
-	http_context() = delete;
+	HttpContext() = delete;
 
-	http_context(
+	HttpContext(
         const std::string& url,
         const http_header_function& recv_header_handler,
         const http_slice_function& recv_slice_handler,
@@ -351,20 +355,20 @@ struct http_context : public std::enable_shared_from_this<http_context>
 		init(url);
 	}
 
-	static std::shared_ptr<http_context> create(
+	static std::shared_ptr<HttpContext> create(
 		const std::string& url,
 		const http_header_function& recv_header_handler = nullptr,
 		const http_slice_function& recv_slice_handler = nullptr,
 		const http_finish_function& http_finish_handler = nullptr)
 	{
-		return std::make_shared<http_context>(
+		return std::make_shared<HttpContext>(
 			url,
 			recv_header_handler,
 			recv_slice_handler,
 			http_finish_handler
 		);
 	}
-	~http_context()
+	~HttpContext()
 	{
 		return;
 	}
@@ -397,7 +401,7 @@ struct http_context : public std::enable_shared_from_this<http_context>
 		{
 			if (!request_url.parse(*url))
 			{
-				finish_in_failure(http_invalid_url, "parse url");
+				finish_in_failure(INVALID_URL, "parse url");
 				return false;
 			}
 		}
@@ -415,7 +419,7 @@ struct http_context : public std::enable_shared_from_this<http_context>
 
 		request.method_string(request_method);
 		request.version(config.version);
-		request.target(request_url.target());
+		request.target(request_url.path_to_resource());
 		request.set(http::field::host, request_url.host);
 		request.set(http::field::connection, "keep-alive");
 
@@ -545,7 +549,7 @@ struct http_client : public std::enable_shared_from_this<http_client>
 
 	beast::flat_buffer buffer;
 
-	std::shared_ptr<http_context> http_ctx; 
+	std::shared_ptr<HttpContext> http_ctx; 
 	
 	bool is_https_request = false;
 	bool is_reusable = false;
@@ -580,23 +584,23 @@ struct http_client : public std::enable_shared_from_this<http_client>
 	}
 	
 
-	void execute(std::shared_ptr<http_context> ctx)
+	void execute(std::shared_ptr<HttpContext> ctx)
 	{
 		http_ctx = ctx;
 
 		if (http_ctx->finished)
-			return finish_in_failure(http_invalid_request, "http_client::execute");
+			return finish_in_failure(INVALID_REQUEST, "http_client::execute");
 
 		if (is_reusable)
 		{
 			is_reusable = false;
-			printf("simple::http find & reuse a exist connection: %s \n", http_ctx->request_url.full_url().c_str());
+			printf("simple::http find & reuse a exist connection: %s \n", http_ctx->request_url.to_url().c_str());
 			on_handshake(beast::error_code());
 			return;
 		}
 		else
 		{
-			printf("simple::http start a new connection: %s \n", http_ctx->request_url.full_url().c_str());
+			printf("simple::http start a new connection: %s \n", http_ctx->request_url.to_url().c_str());
 		}
 
 		is_https_request = http_ctx->request_url.scheme == "https";
@@ -1045,14 +1049,14 @@ struct http_manager
 	}
 
 	
-	std::shared_ptr<http_context> create_http_and_execute(
+	std::shared_ptr<HttpContext> create_http_and_execute(
 		const std::string& url,
 		const http_header_function& recv_header_handler = nullptr,
 		const http_slice_function& recv_slice_handler = nullptr, 
 		const http_finish_function& http_finish_handler = nullptr
 	)
 	{
-		auto req = http_context::create(url, recv_header_handler, recv_slice_handler, http_finish_handler);
+		auto req = HttpContext::create(url, recv_header_handler, recv_slice_handler, http_finish_handler);
 		if (req->finished)
 			return nullptr;
 
@@ -1060,19 +1064,19 @@ struct http_manager
 		return req->shared_from_this();
 	}
 
-	void execute(std::shared_ptr<http_context> req)
+	void execute(std::shared_ptr<HttpContext> req)
 	{
 		auto client = thread_safe(
 			[&]()->std::shared_ptr<http_client>
 			{
-				return get_http_client(req->request_url.connection());
+				return get_http_client(req->request_url.endpoint());
 			}
 		);
 
 		auto on_http_finish = req->callback.on_http_finish;
-		req->callback.on_http_finish = [this,client,on_http_finish](const http_context* ctx, int status_code, const std::string& body)
+		req->callback.on_http_finish = [this,client,on_http_finish](const HttpContext* ctx, int status_code, const std::string& body)
 			{
-				printf("simple::http finished:%s, status:%d, content:%d \n", ctx->request_url.full_url().c_str(), status_code, ctx->response.content_length);
+				printf("simple::http finished:%s, status:%d, content:%d \n", ctx->request_url.to_url().c_str(), status_code, ctx->response.content_length);
 				this->recycle_http_client(client);
 				on_http_finish(ctx, status_code, body);
 			};
@@ -1099,7 +1103,7 @@ struct http_manager
 	{
 		if (client->is_reusable)
 		{
-			http_client_pool.insert({ client->http_ctx->request_url.connection(), client });
+			http_client_pool.insert({ client->http_ctx->request_url.endpoint(), client });
 		}
 	}
 
@@ -1117,13 +1121,13 @@ protected:
 
 struct http_tools
 {
-	static bool sync_http_op(std::shared_ptr<http_context> request, std::string& out, int64_t timeout_ms)
+	static bool sync_http_op(std::shared_ptr<HttpContext> request, std::string& out, int64_t timeout_ms)
 	{
 		asio::io_context io_ctx;
 		ssl::context ssl_ctx{ ssl::context::tlsv13_client };
 		steady_timer_ex timer{ io_ctx };
 
-		request->callback.on_http_finish = [&timer](const http_context* ctx, int status_code, const std::string& body) {
+		request->callback.on_http_finish = [&timer](const HttpContext* ctx, int status_code, const std::string& body) {
 			timer.cancel();
 		};
 
@@ -1146,13 +1150,13 @@ struct http_tools
 
 	static bool sync_http_get(const std::string& url, std::string& out, int64_t timeout_ms)
 	{
-		auto request = http_context::create(url);
+		auto request = HttpContext::create(url);
 		return sync_http_op(request, out, timeout_ms);
 	}
 
 	static bool sync_http_post(const std::string& url, const std::vector<multipart_body_item>& items, std::string& out, int64_t timeout_ms)
 	{
-		auto request = http_context::create("");
+		auto request = HttpContext::create("");
 		request->init("POST", &url);
 		request->post_data = items;
 
