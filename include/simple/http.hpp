@@ -162,6 +162,16 @@ struct http_url
 			return path;
 	}
 
+    std::string connection() const
+    {
+        return scheme + "://" + host + ":" + port;
+    }
+
+	std::string full_url() const
+	{
+		return connection() + target();
+	}
+
 	bool parse(const std::string& url)
 	{
 		return parse(url, *this);
@@ -206,6 +216,7 @@ struct http_url
 };
 
 struct http_context;
+struct http_manager;
 
 using http_header_function	= std::function<void(const http_context* ctx, int status_code)>;
 using http_slice_function	= std::function<void(const http_context* ctx, uint64_t offset, std::string_view& slice)>;
@@ -406,6 +417,7 @@ struct http_context : public std::enable_shared_from_this<http_context>
 		request.version(config.version);
 		request.target(request_url.target());
 		request.set(http::field::host, request_url.host);
+		request.set(http::field::connection, "keep-alive");
 
 		return true;
 	}
@@ -474,7 +486,10 @@ struct http_context : public std::enable_shared_from_this<http_context>
 	void on_http_finish()
 	{
 		finished = true;
-		callback.http_finish(this, response_status_code(), response_body());
+		if (my_error_code)
+			callback.http_finish(this, my_error_code.value(), response_body());
+		else
+			callback.http_finish(this, response_status_code(), response_body());
 	}
 
 	void on_recv_header()
@@ -531,7 +546,9 @@ struct http_client : public std::enable_shared_from_this<http_client>
 	beast::flat_buffer buffer;
 
 	std::shared_ptr<http_context> http_ctx; 
+	
 	bool is_https_request = false;
+	bool is_reusable = false;
 	
 	http_client(asio::io_context& ioc_ctx, ssl::context& ssl_ctx)
 		: ssl_stream_(ioc_ctx, ssl_ctx)
@@ -550,12 +567,37 @@ struct http_client : public std::enable_shared_from_this<http_client>
 		return is_https_request ? beast::get_lowest_layer(ssl_stream_) : tcp_stream_;
 	}
 
+	void finish_in_failure(const beast::error_code& ec, const std::string& info)
+	{
+		is_reusable = false;
+		return http_ctx->finish_in_failure(ec, info);
+	}
+
+	void finish_in_success()
+	{
+		is_reusable = true;
+		return http_ctx->finish_in_success();
+	}
+	
+
 	void execute(std::shared_ptr<http_context> ctx)
 	{
 		http_ctx = ctx;
 
 		if (http_ctx->finished)
-			return http_ctx->finish_in_failure(http_invalid_request, "http_client::execute");
+			return finish_in_failure(http_invalid_request, "http_client::execute");
+
+		if (is_reusable)
+		{
+			is_reusable = false;
+			printf("simple::http find & reuse a exist connection: %s \n", http_ctx->request_url.full_url().c_str());
+			on_handshake(beast::error_code());
+			return;
+		}
+		else
+		{
+			printf("simple::http start a new connection: %s \n", http_ctx->request_url.full_url().c_str());
+		}
 
 		is_https_request = http_ctx->request_url.scheme == "https";
 
@@ -567,7 +609,7 @@ struct http_client : public std::enable_shared_from_this<http_client>
 			if (!SSL_set_tlsext_host_name(ssl_stream_.native_handle(), http_ctx->request_url.host.c_str()))
 			{
 				beast::error_code ec{ static_cast<int>(::ERR_get_error()), asio::error::get_ssl_category() };
-				return http_ctx->finish_in_failure(ec, "SSL_set_tlsext_host_name");
+				return finish_in_failure(ec, "SSL_set_tlsext_host_name");
 			}
 		}
 
@@ -593,7 +635,7 @@ struct http_client : public std::enable_shared_from_this<http_client>
 		timer.cancel();
 
 		if (ec)
-			return http_ctx->finish_in_failure(ec, "resolve");
+			return finish_in_failure(ec, "resolve");
 
 		for (auto& it : results)
 		{
@@ -623,7 +665,7 @@ struct http_client : public std::enable_shared_from_this<http_client>
 		timer.cancel();
 
 		if (ec)
-			return http_ctx->finish_in_failure(ec, "connect");
+			return finish_in_failure(ec, "connect");
 
 		if (is_https_request)
 		{
@@ -653,7 +695,7 @@ struct http_client : public std::enable_shared_from_this<http_client>
 		timer.cancel();
 
 		if (ec)
-			return http_ctx->finish_in_failure(ec, "handshake");
+			return finish_in_failure(ec, "handshake");
 
 		if (http_ctx->request.method_string() == "POST")
 		{
@@ -735,7 +777,7 @@ struct http_client : public std::enable_shared_from_this<http_client>
 		boost::ignore_unused(bytes_transferred);
 
 		if (ec)
-			return http_ctx->finish_in_failure(ec, "write");
+			return finish_in_failure(ec, "write");
 
 		if (is_https_request)
 		{
@@ -797,7 +839,7 @@ struct http_client : public std::enable_shared_from_this<http_client>
 		timer.cancel();
 
 		if (ec)
-			return http_ctx->finish_in_failure(ec, "read response header");
+			return finish_in_failure(ec, "read response header");
 
 		// TBD
 		http_ctx->on_recv_header();
@@ -857,11 +899,11 @@ struct http_client : public std::enable_shared_from_this<http_client>
 		boost::ignore_unused(bytes_transferred);
 
 		if (ec)
-			return http_ctx->finish_in_failure(ec, "read response body");
+			return finish_in_failure(ec, "read response body");
 
 		std::cout << "url:" << http_ctx->request_url.host << ", size:" << http_ctx->response.string_body->get().body().size() << "\n";
 
-		return http_ctx->finish_in_success();
+		return finish_in_success();
 	}
 
 	void async_read_response_body_slice()
@@ -913,16 +955,16 @@ struct http_client : public std::enable_shared_from_this<http_client>
 
 		if (ec == boost::asio::error::eof)
 		{
-			return http_ctx->finish_in_success(); // TODO?
+			return finish_in_success(); // TODO?
 		}
 
 		if (ec)
-			return http_ctx->finish_in_failure(ec, "read response slice");
+			return finish_in_failure(ec, "read response slice");
 
 		http_ctx->on_recv_slice();
 
 		if (http_ctx->response.buffer_body->is_done())
- 			return http_ctx->finish_in_success();
+ 			return finish_in_success();
 
 		async_read_response_body_slice();
 	}
@@ -971,7 +1013,7 @@ struct http_manager
 	template<typename WorkHandler>
 	auto thread_safe(WorkHandler handler)
 	{
-		auto f = io_ctx.post(boost::asio::use_future(handler));
+		auto f = io_ctx.dispatch(boost::asio::use_future(handler));
 		f.wait();
 		return f.get();
 	}
@@ -1020,8 +1062,45 @@ struct http_manager
 
 	void execute(std::shared_ptr<http_context> req)
 	{
-		auto client = std::make_shared<http_client>(io_ctx, ssl_ctx);
+		auto client = thread_safe(
+			[&]()->std::shared_ptr<http_client>
+			{
+				return get_http_client(req->request_url.connection());
+			}
+		);
+
+		auto on_http_finish = req->callback.on_http_finish;
+		req->callback.on_http_finish = [this,client,on_http_finish](const http_context* ctx, int status_code, const std::string& body)
+			{
+				printf("simple::http finished:%s, status:%d, content:%d \n", ctx->request_url.full_url().c_str(), status_code, ctx->response.content_length);
+				this->recycle_http_client(client);
+				on_http_finish(ctx, status_code, body);
+			};
 		client->execute(req);
+	}
+
+	std::shared_ptr<http_client> get_http_client(const std::string connection)
+	{
+		std::shared_ptr<http_client> client;
+		auto it = http_client_pool.find(connection);
+		if (it == http_client_pool.end())
+		{
+			client = std::make_shared<http_client>(io_ctx, ssl_ctx);
+		}
+		else
+		{
+			client = it->second;
+			http_client_pool.erase(it);
+		}
+		return client;
+	}
+
+	void recycle_http_client(std::shared_ptr<http_client> client)
+	{
+		if (client->is_reusable)
+		{
+			http_client_pool.insert({ client->http_ctx->request_url.connection(), client });
+		}
 	}
 
 	void stop()
@@ -1033,6 +1112,7 @@ protected:
 	asio::io_context io_ctx;
 	ssl::context ssl_ctx{ ssl::context::tlsv13_client };
 	std::shared_ptr<io_context_work_thread> work_thread;
+	std::unordered_multimap<std::string, std::shared_ptr<http_client>> http_client_pool;
 };
 
 struct http_tools

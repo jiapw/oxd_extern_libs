@@ -3,13 +3,14 @@
 
 #include <cassert>
 
-const std::string url = "https://cls.2ndu.com/chunk-store/v1/hv?file_id=ab7cb16a9a44d65c0ff524fc7518909f0fd4a3314aecd38ecc53c7a94ff0d4c9";
+//const std::string url = "https://cls.2ndu.com/chunk-store/v1/hv?file_id=ab7cb16a9a44d65c0ff524fc7518909f0fd4a3314aecd38ecc53c7a94ff0d4c9";
+const std::string url = "https://video1.2ndu.com/16MB/4x4_0.bin";
 
 void test_http_tools()
 {
-	if(0)
+	if(1)
 	{
-		auto r = simple::http_tools::sync_http_get("https://www.sina.com.cn");
+		auto r = simple::http_tools::sync_http_get("https://www.sina.com.cn", 10*1000);
 		assert(r);
 		printf("%s\n\n", r->c_str());
 	}
@@ -26,7 +27,8 @@ void test_http_tools()
 					return true;
 				}}
 			}, 
-			r
+			r,
+			10*1000
 		);
 		printf("%s\n\n", r.c_str());
 	}
@@ -34,14 +36,25 @@ void test_http_tools()
 
 void test_http_manager()
 {
-	simple::nanoseconds::timestamp tm;
-	printf("start: %lld \n", simple::ms::now());
-	simple::seconds::sleep(10);
+	
+	simple::http_manager http_mngr;
+	http_mngr.start_work_thread();
+
+	std::vector<std::string> urls = {
+		"https://video1.21ndu.com/16MB/4x4_0.bin",
+		"https://video1.2ndu.com/16MB/4x4_1.bin",
+		"https://video1.2ndu.com/16MB/4x4_4.bin",
+		"https://video1.2ndu.com/16MB/4x4_2.bin"
+	};
+
+	for (auto i =0 ;i<4;i++)
 	{
-		simple::http_manager http_mngr;
-		http_mngr.start_work_thread();
+		simple::ms::timestamp tm;
+
+		printf("\nstart: %lld \n", simple::ms::now());
+		
 		{
-			auto  http_req = std::make_shared<simple::http_context>(url,
+			auto  http_req = std::make_shared<simple::http_context>(urls[i],
 				[](const simple::http_context* ctx, int status_code)->void
 				{
 					printf("recv header:\n status code:%d \n content length:%lld \n", status_code, ctx->response.content_length);
@@ -69,10 +82,12 @@ void test_http_manager()
 				std::this_thread::sleep_for(std::chrono::milliseconds(100));
 			}
 		}
-		http_mngr.stop_work_thread();
+
+		printf("stop: %lld \n", simple::ms::now());
+		printf("elapsed: %lld \n", tm.elapsed());
 	}
-	printf("stop: %lld \n", simple::ms::now());
-	printf("elapsed: %lld \n", tm.elapsed());
+
+	http_mngr.stop_work_thread();
 
 }
 
