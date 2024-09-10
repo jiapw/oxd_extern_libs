@@ -10,14 +10,14 @@ void test_http_tools()
 {
 	if(1)
 	{
-		auto r = simple::http_tools::sync_http_get("https://www.sina.com.cn", 10*1000);
+		auto r = simple::Http::Sync::Get("https://www.sina.com.cn", 10*1000);
 		assert(r);
 		printf("%s\n\n", r->c_str());
 	}
 
 	{
 		std::string r;
-		simple::http_tools::sync_http_post(
+		simple::Http::Sync::Post(
 			"https://echo.free.beeceptor.com", 
 			{ 
 				{"name_1","value_1"}, 
@@ -37,7 +37,7 @@ void test_http_tools()
 void test_http_manager()
 {
 	
-	simple::http_manager http_mngr;
+	simple::HttpManager http_mngr;
 	http_mngr.start_work_thread();
 
 	std::vector<std::string> urls = {
@@ -77,7 +77,7 @@ void test_http_manager()
 			);
 			http_mngr.execute(http_req);
 
-			while (!http_req->finished)
+			while (!http_req->is_completed())
 			{
 				std::this_thread::sleep_for(std::chrono::milliseconds(100));
 			}
