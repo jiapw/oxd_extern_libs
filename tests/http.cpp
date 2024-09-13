@@ -71,6 +71,7 @@ void test_http_manager()
 
 				[](const simple::HttpContext* ctx, int status_code, const std::string& body)->void
 				{
+					assert(simple::is_http_status_2xx(status_code));
 					printf("http finish:\n status code:%d, total size:%lld \n", status_code, ctx->response.content_length);
 				}
 

@@ -34,11 +34,11 @@ bool http_status_match(int status_code)
     return (status_code / 100) == N;
 };
 
-using is_http_status_1xx = decltype(http_status_match<1>);
-using is_http_status_2xx = decltype(http_status_match<2>);
-using is_http_status_3xx = decltype(http_status_match<3>);
-using is_http_status_4xx = decltype(http_status_match<4>);
-using is_http_status_5xx = decltype(http_status_match<5>);
+inline auto is_http_status_1xx = http_status_match<1>;
+inline auto is_http_status_2xx = http_status_match<2>;
+inline auto is_http_status_3xx = http_status_match<3>;
+inline auto is_http_status_4xx = http_status_match<4>;
+inline auto is_http_status_5xx = http_status_match<5>;
 
 inline void fail(beast::error_code ec, char const* what)
 {
