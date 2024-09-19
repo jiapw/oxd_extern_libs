@@ -14,7 +14,9 @@
 #include <boost/asio.hpp>
 #include <boost/beast.hpp>
 #include <boost/beast/ssl.hpp>
-#include <boost/format.hpp>
+
+#include <spdlog/fmt/fmt.h>
+#include <spdlog/spdlog.h>
 
 //Due to the use of asynchronous operations, it is necessary to ensure that the object must exist at the time of the callback. 
 //Please use smart pointer of the object. 
@@ -319,7 +321,7 @@ struct HttpContext : public std::enable_shared_from_this<HttpContext>
     {
         Url             url;
         std::string     method;
-        int             range_from;
+        int             range_from = 0;
         
         http::request<http::string_body> body;
 
@@ -328,7 +330,7 @@ struct HttpContext : public std::enable_shared_from_this<HttpContext>
         void set_range(int from)
         {
             range_from = from;
-            std::string range_str = (boost::format("bytes=%d-") % from).str();
+            std::string range_str = fmt::format("bytes={}-", from);
             body.set(http::field::range, range_str);
         }
 
@@ -611,13 +613,13 @@ struct HttpConnection : public std::enable_shared_from_this<HttpConnection>
         if (is_reusable)
         {
             is_reusable = false;
-            printf("simple::http find & reuse a exist connection: %s \n", http_ctx->request.url_string());
+            spdlog::info("simple::http find & reuse a exist connection: {}", http_ctx->request.url_string());
             on_handshake(beast::error_code());
             return;
         }
         else
         {
-            printf("simple::http start a new connection: %s \n", http_ctx->request.url_string());
+            spdlog::info("simple::http start a new connection: {}", http_ctx->request.url_string());
         }
 
         is_https_request = http_ctx->request.url.scheme == "https";
@@ -1098,7 +1100,7 @@ struct HttpManager
         auto on_http_finish = req->callback.on_complete;
         req->callback.on_complete = [this,client,on_http_finish](const HttpContext* ctx, int status_code, const std::string& body)
             {
-                printf("simple::http finished:%s, status:%d, content:%d \n", ctx->request.url_string(), status_code, ctx->response.content_length);
+                spdlog::info("simple::http finished:{}, status:{}, content:{}", ctx->request.url_string(), status_code, ctx->response.content_length);
                 this->recycle_http_client(client);
                 on_http_finish(ctx, status_code, body);
             };
