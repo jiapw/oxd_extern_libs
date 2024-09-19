@@ -10,14 +10,14 @@ void test_http_tools()
 {
 	if(1)
 	{
-		auto r = simple::http_tools::sync_http_get("https://www.sina.com.cn", 10*1000);
+		auto r = simple::Http::Sync::Get("https://www.sina.com.cn", 10*1000);
 		assert(r);
 		printf("%s\n\n", r->c_str());
 	}
 
 	{
 		std::string r;
-		simple::http_tools::sync_http_post(
+		simple::Http::Sync::Post(
 			"https://echo.free.beeceptor.com", 
 			{ 
 				{"name_1","value_1"}, 
@@ -37,7 +37,7 @@ void test_http_tools()
 void test_http_manager()
 {
 	
-	simple::http_manager http_mngr;
+	simple::HttpManager http_mngr;
 	http_mngr.start_work_thread();
 
 	std::vector<std::string> urls = {
@@ -54,8 +54,8 @@ void test_http_manager()
 		printf("\nstart: %lld \n", simple::ms::now());
 		
 		{
-			auto  http_req = std::make_shared<simple::http_context>(urls[i],
-				[](const simple::http_context* ctx, int status_code)->void
+			auto  http_req = std::make_shared<simple::HttpContext>(urls[i],
+				[](const simple::HttpContext* ctx, int status_code)->void
 				{
 					printf("recv header:\n status code:%d \n content length:%lld \n", status_code, ctx->response.content_length);
 				},
@@ -69,15 +69,16 @@ void test_http_manager()
 				nullptr,
 #endif
 
-				[](const simple::http_context* ctx, int status_code, const std::string& body)->void
+				[](const simple::HttpContext* ctx, int status_code, const std::string& body)->void
 				{
+					assert(simple::is_http_status_2xx(status_code));
 					printf("http finish:\n status code:%d, total size:%lld \n", status_code, ctx->response.content_length);
 				}
 
 			);
 			http_mngr.execute(http_req);
 
-			while (!http_req->finished)
+			while (!http_req->is_completed())
 			{
 				std::this_thread::sleep_for(std::chrono::milliseconds(100));
 			}
