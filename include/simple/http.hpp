@@ -15,8 +15,11 @@
 #include <boost/beast.hpp>
 #include <boost/beast/ssl.hpp>
 
-#include <spdlog/fmt/fmt.h>
-#include <spdlog/spdlog.h>
+#include "fmt.hpp"
+#include "log.hpp"
+#include "time.hpp"
+
+
 
 //Due to the use of asynchronous operations, it is necessary to ensure that the object must exist at the time of the callback. 
 //Please use smart pointer of the object. 
@@ -44,12 +47,14 @@ inline auto is_http_status_5xx = http_status_match<5>;
 
 inline void fail(beast::error_code ec, char const* what)
 {
-    std::cerr << what << ": " << ec.message() << "\n";
+    spdlog::warn("failed: {}, {}", what, ec.message());
+    //std::cerr << what << ": " << ec.message() << "\n";
 }
 
 inline bool fail(char const* message, char const* what)
 {
-    std::cerr << what << ": " << message << "\n";
+    spdlog::warn("failed: {}, {}", what, message);
+    // std::cerr << what << ": " << message << "\n";
     return false;
 }
 
@@ -63,7 +68,10 @@ enum class HttpErrorCode {
     TIMEOUT_WRITE_REQUEST,
     TIMEOUT_READ_RESPONSE_HEADER,
     TIMEOUT_READ_RESPONSE_BODY,
-    TIMEOUT_READ_RESPONSE_SLICE	
+    TIMEOUT_READ_RESPONSE_SLICE,
+
+    BLOCKED_BY_CONFIG = 0X3001,
+    BLOCKED_BY_FAILURE_CACHE,
 };
 
 using error_code = boost::system::error_code;
@@ -98,6 +106,10 @@ public:
             return "read response body";
         case HttpErrorCode::TIMEOUT_READ_RESPONSE_SLICE:
             return "read response slice";
+        case HttpErrorCode::BLOCKED_BY_CONFIG:
+            return "block request by config";
+        case HttpErrorCode::BLOCKED_BY_FAILURE_CACHE:
+            return "block request by recent frequent errors at same url";
         default:
             return "unknown error ";
         }
@@ -110,7 +122,6 @@ public:
     }
 };
 
-
 const error_code INVALID_URL                    = HttpErrorCategory::make_error_code(HttpErrorCode::INVALID_URL);
 const error_code INVALID_REQUEST                = HttpErrorCategory::make_error_code(HttpErrorCode::INVALID_REQUEST);
 const error_code TIMEOUT_RESOLVE                = HttpErrorCategory::make_error_code(HttpErrorCode::TIMEOUT_RESOLVE);
@@ -120,7 +131,8 @@ const error_code TIMEOUT_WRITE_REQUEST          = HttpErrorCategory::make_error_
 const error_code TIMEOUT_READ_RESPONSE_HEADER   = HttpErrorCategory::make_error_code(HttpErrorCode::TIMEOUT_READ_RESPONSE_HEADER);
 const error_code TIMEOUT_READ_RESPONSE_BODY     = HttpErrorCategory::make_error_code(HttpErrorCode::TIMEOUT_READ_RESPONSE_BODY);
 const error_code TIMEOUT_READ_RESPONSE_SLICE    = HttpErrorCategory::make_error_code(HttpErrorCode::TIMEOUT_READ_RESPONSE_SLICE);
-
+const error_code BLOCKED_BY_CONFIG              = HttpErrorCategory::make_error_code(HttpErrorCode::BLOCKED_BY_CONFIG);
+const error_code BLOCKED_BY_FAILURE_CACHE       = HttpErrorCategory::make_error_code(HttpErrorCode::BLOCKED_BY_FAILURE_CACHE);
 
 struct Url
 {
@@ -222,14 +234,100 @@ struct Url
     }
 };
 
+struct HttpResultCache
+{
+protected:
+    struct Result
+    {
+        int failed_count;
+        int64_t last_failed_tms;
+        int64_t unfreeze_tms;
+    };
+
+    std::unordered_map<std::string, Result> results;
+
+    HttpResultCache()
+    {
+    }
+    void report_result(const std::string& url, int status_code)
+    {
+        auto now = simple::ms::now();
+        auto it = results.find(url);
+
+        if (is_http_status_2xx(status_code) || is_http_status_3xx(status_code))
+        {
+            if (it == results.end())
+                return;
+
+            results.erase(it);
+            return;
+        }
+
+        if (it == results.end())
+        {
+            results.insert({
+                url,
+                {
+                    1,
+                    now,
+                    now + 1000 * 1
+                }
+                });
+        }
+        else
+        {
+            auto& result = it->second;
+            result.failed_count++;
+            result.last_failed_tms = now;
+            result.unfreeze_tms = now + 1000 * pow(2, (result.failed_count > 4 ? 4 : result.failed_count));
+        }
+    }
+    bool is_freezed(const std::string& url)
+    {
+        auto it = results.find(url);
+        if (it == results.end())
+            return false;
+        auto& result = it->second;
+        return (simple::ms::now() < result.unfreeze_tms);
+    }
+    int64_t get_unfreeze_time(const std::string& url)
+    {
+        auto it = results.find(url);
+        if (it == results.end())
+            return 0;
+        return it->second.unfreeze_tms;
+    }
+public:
+    static HttpResultCache& Singletone()
+    {
+        static HttpResultCache _;
+        return _;
+    }
+    static void ReportResult(const std::string& url, int status_code)
+    {
+        static HttpResultCache& cache = Singletone();
+        cache.report_result(url, status_code);
+    }
+    static bool IsFreezed(const std::string& url)
+    {
+        static HttpResultCache& cache = Singletone();
+        return cache.is_freezed(url);
+    }
+    static int64_t GetUnfreezeTime(const std::string& url)
+    {
+        static HttpResultCache& cache = Singletone();
+        return cache.get_unfreeze_time(url);
+    }
+};
+
 struct HttpContext;
 struct HttpManager;
 
 struct HttpCallback
 {
-    using OnRecvHeader  = std::function<void(const HttpContext* ctx, int status_code)>;
-    using OnRecvSlice   = std::function<void(const HttpContext* ctx, uint64_t offset, std::string_view& slice)>;
-    using OnComplete    = std::function<void(const HttpContext* ctx, int status_code, const std::string& body)>;
+    using OnRecvHeader  = std::function<void(HttpContext* ctx, int status_code)>;
+    using OnRecvSlice   = std::function<void(HttpContext* ctx, uint64_t offset, std::string_view& slice)>;
+    using OnComplete    = std::function<void(HttpContext* ctx, int status_code, const std::string& body)>;
     using OnDataNeeded  = std::function<bool(std::string& buf)>;
     using OnTimer       = std::function<void(const boost::system::error_code& ec)>;
 };
@@ -273,17 +371,17 @@ struct HttpContext : public std::enable_shared_from_this<HttpContext>
         HttpCallback::OnRecvSlice   on_recv_slice;
         HttpCallback::OnComplete    on_complete;
 
-        void recv_header(const HttpContext* ctx, int status_code)
+        void recv_header(HttpContext* ctx, int status_code)
         {
             if (on_recv_header)
                 on_recv_header(ctx, status_code);
         }
-        void recv_slice(const HttpContext* ctx, uint64_t offset, std::string_view& slice)
+        void recv_slice(HttpContext* ctx, uint64_t offset, std::string_view& slice)
         {
             if (on_recv_slice)
                 on_recv_slice(ctx, offset, slice);
         }
-        void http_complete(const HttpContext* ctx, int status_code, const std::string& body)
+        void http_complete(HttpContext* ctx, int status_code, const std::string& body)
         {
             if (on_complete)
                 on_complete(ctx, status_code, body);
@@ -525,7 +623,11 @@ struct HttpContext : public std::enable_shared_from_this<HttpContext>
             response.content_length = opt.value();
         }
 
-        callback.recv_header(this, response_status_code());
+        int rc = response_status_code();
+
+        HttpResultCache::ReportResult(request.url_string(), rc);
+
+        callback.recv_header(this, rc);
     }
 
     void finish_in_failure(const beast::error_code& ec, const std::string& info)
@@ -585,6 +687,13 @@ struct HttpConnection : public std::enable_shared_from_this<HttpConnection>
         return;
     }
 
+    std::string to_string(int level = 0)
+    {
+        std::string  s;
+        s = fmt::format("HttpConnection object:{}, is_reusable:{}", (void*)this, is_reusable);
+        return s;
+    }
+
     inline beast::tcp_stream& get_tcp_stream()
     {
         return is_https_request ? beast::get_lowest_layer(ssl_stream_) : tcp_stream_;
@@ -610,16 +719,16 @@ struct HttpConnection : public std::enable_shared_from_this<HttpConnection>
         if (http_ctx->is_completed())
             return finish_in_failure(INVALID_REQUEST, "http_client::execute");
 
+        if (HttpResultCache::IsFreezed(ctx->request.url_string()))
+            return finish_in_failure(BLOCKED_BY_FAILURE_CACHE, "http_client::execute");
+
+        spdlog::debug("HttpConnection::execute(), {}", this->to_string());
+
         if (is_reusable)
         {
             is_reusable = false;
-            spdlog::info("simple::http find & reuse a exist connection: {}", http_ctx->request.url_string());
             on_handshake(beast::error_code());
             return;
-        }
-        else
-        {
-            spdlog::info("simple::http start a new connection: {}", http_ctx->request.url_string());
         }
 
         is_https_request = http_ctx->request.url.scheme == "https";
@@ -1000,6 +1109,17 @@ struct IOContextWorker
     asio::io_context& io_ctx;
     boost::asio::executor_work_guard<boost::asio::io_context::executor_type> work_guard;
     std::thread thread;
+    enum class st
+    {
+        init = 0,
+        start,
+        stop
+    };
+    st thread_state = st::init;
+    bool is_running()
+    {
+        return thread_state == st::start;
+    }
     IOContextWorker(asio::io_context& io_c)
         : io_ctx(io_c)
         , work_guard(boost::asio::make_work_guard(io_c))
@@ -1008,21 +1128,45 @@ struct IOContextWorker
     }
     void thread_func()
     {
-        printf("run() start\n");
+        spdlog::debug("IOContextWorker start");
+        thread_state = st::start;
+
         io_ctx.restart();
         io_ctx.run();
-        printf("run() stop\n");
+
+        thread_state = st::stop;
+        spdlog::debug("IOContextWorker stop");
     }
-    ~IOContextWorker()
+    void stop()
     {
+        if (!is_running())
+            return;
+
         work_guard.reset();
         io_ctx.stop();
         thread.join();
     }
+    ~IOContextWorker()
+    {
+        stop();
+    }
 };
+
+
+#define CHECK_WORK_THREAD \
+if (!in_work_thread()) \
+{ \
+    spdlog::critical("recycle_http_client NOT in work thread!"); \
+}
 
 struct HttpManager
 {
+    HttpManager()
+    {
+        spdlog::set_pattern("%^[%l] %v%$");
+        spdlog::set_level(spdlog::level::debug);
+    }
+
     void start_work_thread()
     {
         worker = std::make_shared<IOContextWorker>(io_ctx);
@@ -1030,7 +1174,15 @@ struct HttpManager
 
     void stop_work_thread()
     {
+        worker->stop();
         worker = nullptr;
+    }
+
+    bool in_work_thread()
+    {
+        assert(worker);
+        assert(worker->is_running());
+        return (std::this_thread::get_id() == worker->thread.get_id());
     }
 
     template<typename WorkHandler>
@@ -1043,6 +1195,8 @@ struct HttpManager
 
     void _thread_timer_func(const boost::system::error_code& ec, int64_t timeout_ms, HttpCallback::OnTimer f, std::shared_ptr<SteadyTimer> timer)
     {
+        CHECK_WORK_THREAD;
+
         if (ec == asio::error::operation_aborted) // cancel
             return;
 
@@ -1057,7 +1211,7 @@ struct HttpManager
         );
     }
 
-    std::shared_ptr<SteadyTimer> thread_timer(int64_t timeout_ms, HttpCallback::OnTimer f)
+    std::shared_ptr<SteadyTimer> create_thread_timer(int64_t timeout_ms, HttpCallback::OnTimer f)
     {
         std::shared_ptr<SteadyTimer> timer = std::make_shared<SteadyTimer>(io_ctx);
 
@@ -1098,36 +1252,45 @@ struct HttpManager
         );
 
         auto on_http_finish = req->callback.on_complete;
-        req->callback.on_complete = [this,client,on_http_finish](const HttpContext* ctx, int status_code, const std::string& body)
+        req->callback.on_complete = [this,client,on_http_finish](HttpContext* ctx, int status_code, const std::string& body)
             {
-                spdlog::info("simple::http finished:{}, status:{}, content:{}", ctx->request.url_string(), status_code, ctx->response.content_length);
+                spdlog::debug("simple::http finished:{}, status:{}, content:{}", ctx->request.url_string(), status_code, ctx->response.content_length);
                 this->recycle_http_client(client);
-                on_http_finish(ctx, status_code, body);
+                ctx->callback.on_complete = on_http_finish;
+                ctx->callback.on_complete(ctx, status_code, body);
             };
         client->execute(req);
     }
 
     std::shared_ptr<HttpConnection> get_http_client(const std::string connection)
     {
+        CHECK_WORK_THREAD;
+
         std::shared_ptr<HttpConnection> client;
         auto it = http_client_pool.find(connection);
+        bool from_pool = false;
         if (it == http_client_pool.end())
         {
             client = std::make_shared<HttpConnection>(io_ctx, ssl_ctx);
         }
         else
         {
+            from_pool = true;
             client = it->second;
             http_client_pool.erase(it);
         }
+        spdlog::debug("get_http_client, {}, from pool:{}, pool size:{}", client->to_string(), from_pool, http_client_pool.size());
         return client;
     }
 
     void recycle_http_client(std::shared_ptr<HttpConnection> client)
     {
+        CHECK_WORK_THREAD;
+
         if (client->is_reusable)
         {
             http_client_pool.insert({ client->http_ctx->request.url.endpoint(), client });
+            spdlog::debug("recycle_http_client, {}, pool size:{}", client->to_string(), http_client_pool.size());
         }
     }
 
