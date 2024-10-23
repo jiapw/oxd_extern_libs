@@ -279,7 +279,7 @@ protected:
             auto& result = it->second;
             result.failed_count++;
             result.last_failed_tms = now;
-            result.unfreeze_tms = now + 1000 * pow(2, (result.failed_count > 4 ? 4 : result.failed_count));
+            result.unfreeze_tms = now + 1000 * (int)pow(2, (result.failed_count > 4 ? 4 : result.failed_count));
         }
     }
     bool is_freezed(const std::string& url)
@@ -827,7 +827,10 @@ struct HttpConnection : public std::enable_shared_from_this<HttpConnection>
         timer.cancel();
 
         if (ec)
+        {
+            HttpResultCache::ReportResult(http_ctx->request.url_string(), ec.value());
             return finish_in_failure(ec, "handshake");
+        }
 
         if (http_ctx->request.method == "POST")
         {
@@ -1163,7 +1166,7 @@ struct HttpManager
 {
     HttpManager()
     {
-        spdlog::set_pattern("%^[%l] %v%$");
+        // spdlog::set_pattern("%^[%l] %v%$");
         spdlog::set_level(spdlog::level::debug);
     }
 

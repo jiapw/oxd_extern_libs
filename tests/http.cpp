@@ -1,5 +1,7 @@
+#include <simple/log.hpp>
 #include <simple/http.hpp>
 #include <simple/time.hpp>
+
 
 #include <cassert>
 
@@ -92,10 +94,10 @@ void test_http_manager()
 
 }
 
-
 int main()
 {
-	test_http_tools();
+	simple::test_logger();
+	//test_http_tools();
 	//test_http_manager();
 
 	return 0;
