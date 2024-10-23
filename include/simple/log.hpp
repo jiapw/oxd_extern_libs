@@ -70,24 +70,28 @@ namespace simple
 
 using namespace spdlog;
 
-std::shared_ptr<spdlog::sinks::basic_file_sink_mt> global_file_sink()
+struct GlobalFileSink
 {
-    static std::shared_ptr<spdlog::sinks::basic_file_sink_mt> gfs;
-    if (!gfs)
+    static std::shared_ptr<spdlog::sinks::basic_file_sink_mt> SingleInstance()
     {
-        std::filesystem::path temp_dir = std::filesystem::temp_directory_path();
-        uint64_t pid =
+        static std::shared_ptr<spdlog::sinks::basic_file_sink_mt> gfs;
+        if (!gfs)
+        {
+            std::filesystem::path temp_dir = std::filesystem::temp_directory_path();
+            uint64_t pid =
 #ifdef _WIN32
-            GetCurrentProcessId(); // Windows
+                GetCurrentProcessId(); // Windows
 #else
-            getpid(); // Linux/Unix
+                getpid(); // Linux/Unix
 #endif
-        std::string temp_name = fmt::format("pid_{}_{}.log", pid, simple::ms::now());
-        std::filesystem::path full_path = temp_dir / temp_name;
-        gfs = std::make_shared<spdlog::sinks::basic_file_sink_mt>(full_path.string());
+            std::string temp_name = fmt::format("pid_{}_{}.log", pid, simple::ms::now());
+            std::filesystem::path full_path = temp_dir / temp_name;
+            gfs = std::make_shared<spdlog::sinks::basic_file_sink_mt>(full_path.string());
+        }
+        return gfs;
     }
-    return gfs;
-}
+
+};
 
 template<uint64_t id>
 struct Logger
@@ -139,7 +143,7 @@ struct Logger
                 return;
             global_added = true;
 
-            sink = global_file_sink();
+            sink = GlobalFileSink::SingleInstance();
         }
         else
             sink = std::make_shared<spdlog::sinks::basic_file_sink_mt>(file_path);
@@ -202,7 +206,7 @@ namespace level = spdlog::level;
 namespace simple
 {
 
-void test_logger()
+inline void test_logger()
 {
     LOG_DEFINE(FOO);
     FOO::FILESINK();
