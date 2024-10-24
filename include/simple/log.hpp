@@ -6,7 +6,17 @@
 
 #include <cstdint>
 #include <array>
-#include <filesystem>
+
+#if __has_include(<filesystem>)
+    #include <filesystem>
+    namespace simple_fs = std::filesystem;
+#elif __has_include(<experimental/filesystem>)
+    #include <experimental/filesystem>
+    namespace simple_fs = std::experimental::filesystem;
+#else
+    #error "Neither <filesystem> nor <experimental/filesystem> is available."
+#endif
+
 #include "fmt.hpp"
 #include "time.hpp"
 
@@ -77,7 +87,7 @@ struct GlobalFileSink
         static std::shared_ptr<spdlog::sinks::basic_file_sink_mt> gfs;
         if (!gfs)
         {
-            std::filesystem::path temp_dir = std::filesystem::temp_directory_path();
+            simple_fs::path temp_dir = simple_fs::temp_directory_path();
             uint64_t pid =
 #ifdef _WIN32
                 GetCurrentProcessId(); // Windows
@@ -85,7 +95,7 @@ struct GlobalFileSink
                 getpid(); // Linux/Unix
 #endif
             std::string temp_name = fmt::format("pid_{}_{}.log", pid, simple::ms::now());
-            std::filesystem::path full_path = temp_dir / temp_name;
+            simple_fs::path full_path = temp_dir / temp_name;
             gfs = std::make_shared<spdlog::sinks::basic_file_sink_mt>(full_path.string());
         }
         return gfs;
@@ -121,19 +131,19 @@ struct Logger
         return _;
     }
 
-    static level::level_enum LEVEL(level::level_enum lvl)
+    static level::level_enum Level(level::level_enum lvl)
     {
         SingleInstance()->set_level(lvl);
-        return LEVEL();
+        return Level();
     }
 
-    static level::level_enum LEVEL()
+    static level::level_enum Level()
     {
         return SingleInstance()->level();
     }
 
     // If file_path is empty, the auto-named file in the temporary path is used.
-    static void FILESINK(const std::string& file_path = "")
+    static void FileSink(const std::string& file_path = "")
     {
         std::shared_ptr<spdlog::sinks::basic_file_sink_mt> sink;
         if (file_path.empty())
@@ -150,47 +160,50 @@ struct Logger
 
         auto obj = SingleInstance();
         obj->sinks().push_back(sink);
-        INFO("write file : {}", sink->filename());
+        Info(
+            file_path.empty() ? "add auto-named file sink : {}" : "add specific file sink : {}",
+            sink->filename()
+        );
     }
 
     template<typename... Args>
-    static void LOG(level::level_enum lvl, format_string_t<Args...> fmt, Args &&... args)
+    static void Log(level::level_enum lvl, format_string_t<Args...> fmt, Args &&... args)
     {
         SingleInstance()->log(lvl, fmt, std::forward<Args>(args)...);
     }
 
     template<typename... Args>
-    static void TRACE(format_string_t<Args...> fmt, Args &&... args)
+    static void Trace(format_string_t<Args...> fmt, Args &&... args)
     {
         SingleInstance()->log(level::trace, fmt, std::forward<Args>(args)...);
     }
     
     template<typename... Args>
-    static void DEBUG(format_string_t<Args...> fmt, Args &&... args)
+    static void Debug(format_string_t<Args...> fmt, Args &&... args)
     {
         SingleInstance()->log(level::debug, fmt, std::forward<Args>(args)...);
     }
 
     template<typename... Args>
-    static void INFO(format_string_t<Args...> fmt, Args &&... args)
+    static void Info(format_string_t<Args...> fmt, Args &&... args)
     {
         SingleInstance()->log(level::info, fmt, std::forward<Args>(args)...);
     }
 
     template<typename... Args>
-    static void WARN(format_string_t<Args...> fmt, Args &&... args)
+    static void Warn(format_string_t<Args...> fmt, Args &&... args)
     {
         SingleInstance()->log(level::warn, fmt, std::forward<Args>(args)...);
     }
 
     template<typename... Args>
-    static void ERR(format_string_t<Args...> fmt, Args &&... args)
+    static void Error(format_string_t<Args...> fmt, Args &&... args)
     {
         SingleInstance()->log(level::err, fmt, std::forward<Args>(args)...);
     }
 
     template<typename... Args>
-    static void CRITICAL(format_string_t<Args...> fmt, Args &&... args)
+    static void Critical(format_string_t<Args...> fmt, Args &&... args)
     {
         SingleInstance()->log(level::critical, fmt, std::forward<Args>(args)...);
     }
@@ -201,34 +214,32 @@ struct Logger
 
 #define LOG_DEFINE(logger) using logger = simple::Logger<short_string_to_uint64_in_compile_time(#logger)>
 
-namespace level = spdlog::level;
-
 namespace simple
 {
 
 inline void test_logger()
 {
     LOG_DEFINE(FOO);
-    FOO::FILESINK();
-    FOO::FILESINK();
-    FOO::FILESINK("foo.log");
+    FOO::FileSink();
+    FOO::FileSink();
+    FOO::FileSink("foo.log");
 
-    FOO::LOG(level::info, "start with level({})", FOO::LEVEL());
-    FOO::LOG(level::info, "set level({})", FOO::LEVEL(level::trace));
-    FOO::TRACE("this is {}", "trace");
-    FOO::DEBUG("this is {}", "debug");
-    FOO::INFO("this is {}", "info");
-    FOO::WARN("this is {}", "warn");
-    FOO::ERR("this is {}", "error");
-    FOO::CRITICAL("this is {}", "critical");
+    FOO::Log(spdlog::level::info, "start with level({})", FOO::Level());
+    FOO::Log(spdlog::level::info, "set level({})", FOO::Level(spdlog::level::trace));
+    FOO::Trace("this is {}", "trace");
+    FOO::Debug("this is {}", "debug");
+    FOO::Info("this is {}", "info");
+    FOO::Warn("this is {}", "warn");
+    FOO::Error("this is {}", "error");
+    FOO::Critical("this is {}", "critical");
 
     LOG_DEFINE(FOO);
-    FOO::INFO("We can define LOG_DEFINE(FOO) multiple times!");
+    FOO::Info("We can define LOG_DEFINE(FOO) multiple times!");
 
     LOG_DEFINE(FOOLISH);
-    FOOLISH::FILESINK();
-    FOOLISH::FILESINK("foolish.log");
-    FOOLISH::INFO("FOOLSIH info");
+    FOOLISH::FileSink();
+    FOOLISH::FileSink("foolish.log");
+    FOOLISH::Info("FOOLSIH info");
 
 }
 
