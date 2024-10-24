@@ -1299,7 +1299,8 @@ struct HttpManager
 
     void stop()
     {
-        io_ctx.stop();
+        if (worker)
+            worker->stop();
     }
 
 protected:
