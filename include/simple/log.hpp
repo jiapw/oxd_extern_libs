@@ -1,5 +1,5 @@
 #pragma once
-
+#define _SILENCE_STDEXT_ARR_ITERS_DEPRECATION_WARNING
 #include <spdlog/spdlog.h>
 #include <spdlog/sinks/basic_file_sink.h>
 #include <spdlog/sinks/stdout_color_sinks.h>
@@ -127,7 +127,7 @@ struct Logger
 
     static std::shared_ptr<spdlog::logger> SingleInstance()
     {
-        static auto _ = std::make_shared<spdlog::logger>(GetLoggerName(), std::make_shared<spdlog::sinks::stdout_color_sink_mt>());
+        static auto _ = std::make_shared<spdlog::logger>(GetLoggerName(), std::make_shared<spdlog::sinks::stdout_color_sink_mt>(spdlog::color_mode::always));
         return _;
     }
 

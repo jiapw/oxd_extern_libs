@@ -56,7 +56,7 @@ void test_http_manager()
 		printf("\nstart: %lld \n", simple::ms::now());
 		
 		{
-			auto  http_req = std::make_shared<simple::HttpContext>(urls[i],
+			auto  http_req = simple::HttpContext::create(urls[i],
 				[](const simple::HttpContext* ctx, int status_code)->void
 				{
 					printf("recv header:\n status code:%d \n content length:%lld \n", status_code, ctx->response.content_length);
@@ -71,10 +71,10 @@ void test_http_manager()
 				nullptr,
 #endif
 
-				[](const simple::HttpContext* ctx, int status_code, const std::string& body)->void
+				[](const simple::HttpContext* ctx, const simple::error_code& sys_error_code, int http_status_code, const std::string& body)->void
 				{
-					assert(simple::is_http_status_2xx(status_code));
-					printf("http finish:\n status code:%d, total size:%lld \n", status_code, ctx->response.content_length);
+					assert(simple::is_http_status_2xx(http_status_code));
+					printf("http finish:\n status code:%d, total size:%lld \n", http_status_code, ctx->response.content_length);
 				}
 
 			);
@@ -94,9 +94,41 @@ void test_http_manager()
 
 }
 
+void test_http_error_code()
+{
+	LOG_DEFINE(THEC);
+
+	{
+		simple::HttpManager http_mngr;
+		http_mngr.start_work_thread();
+		{
+			auto http_req = simple::HttpContext::create(
+				"http://bing.com",
+				nullptr,
+				nullptr,
+				[](simple::HttpContext* ctx, const simple::error_code& sys_error_code, int http_status_code, const std::string& body) 
+				{
+					THEC::Info("http error code:{}", http_status_code);
+				}
+			);
+			http_req->config.resolve_timeout = 1;
+			http_mngr.execute(http_req);
+			while (!http_req->is_completed())
+			{
+				std::this_thread::sleep_for(std::chrono::milliseconds(100));
+			}
+			THEC::Info("http error code:{}", http_req->status.sys_error_code.to_string());
+		}
+		http_mngr.stop_work_thread();
+		
+	}
+
+}
+
 int main()
 {
-	simple::test_logger();
+	//simple::test_logger()
+	test_http_error_code();
 	//test_http_tools();
 	//test_http_manager();
 

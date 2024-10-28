@@ -59,10 +59,11 @@ inline bool fail(char const* message, char const* what)
 }
 
 enum class HttpErrorCode {
-    INVALID_URL	= 0x1001,
+
+    INVALID_URL         = 0x1001,
     INVALID_REQUEST,
 
-    TIMEOUT_RESOLVE = 0X2001,
+    TIMEOUT_RESOLVE     = 0x2001,
     TIMEOUT_CONNECT,
     TIMEOUT_SSL_HANDSHAKE,	// https only
     TIMEOUT_WRITE_REQUEST,
@@ -70,7 +71,13 @@ enum class HttpErrorCode {
     TIMEOUT_READ_RESPONSE_BODY,
     TIMEOUT_READ_RESPONSE_SLICE,
 
-    BLOCKED_BY_CONFIG = 0X3001,
+    FAILED_RESOLVE      = 0x3001,
+    FAILED_CONNECT,
+    FAILED_SSL_HANDSHAKE,
+    FAILED_READ,
+    FAILED_WRITE,
+
+    BLOCKED_BY_CONFIG   = 0X3001,
     BLOCKED_BY_FAILURE_CACHE,
 };
 
@@ -122,6 +129,7 @@ public:
     }
 };
 
+const error_code SUCCESS                        = error_code();
 const error_code INVALID_URL                    = HttpErrorCategory::make_error_code(HttpErrorCode::INVALID_URL);
 const error_code INVALID_REQUEST                = HttpErrorCategory::make_error_code(HttpErrorCode::INVALID_REQUEST);
 const error_code TIMEOUT_RESOLVE                = HttpErrorCategory::make_error_code(HttpErrorCode::TIMEOUT_RESOLVE);
@@ -325,9 +333,9 @@ struct HttpManager;
 
 struct HttpCallback
 {
-    using OnRecvHeader  = std::function<void(HttpContext* ctx, int status_code)>;
+    using OnRecvHeader  = std::function<void(HttpContext* ctx, int http_status_code)>;
     using OnRecvSlice   = std::function<void(HttpContext* ctx, uint64_t offset, std::string_view& slice)>;
-    using OnComplete    = std::function<void(HttpContext* ctx, int status_code, const std::string& body)>;
+    using OnComplete    = std::function<void(HttpContext* ctx, const error_code& sys_error_code, int http_status_code, const std::string& body)>;
     using OnDataNeeded  = std::function<bool(std::string& buf)>;
     using OnTimer       = std::function<void(const boost::system::error_code& ec)>;
 };
@@ -365,28 +373,29 @@ struct MultipartBodyItem
 
 struct HttpContext : public std::enable_shared_from_this<HttpContext>
 {
-    struct
+    struct Callback
     {
         HttpCallback::OnRecvHeader  on_recv_header;
         HttpCallback::OnRecvSlice   on_recv_slice;
         HttpCallback::OnComplete    on_complete;
 
-        void recv_header(HttpContext* ctx, int status_code)
+        HttpContext* ctx = nullptr;
+
+        void recv_header(int http_status_code)
         {
             if (on_recv_header)
-                on_recv_header(ctx, status_code);
+                on_recv_header(ctx, http_status_code);
         }
-        void recv_slice(HttpContext* ctx, uint64_t offset, std::string_view& slice)
+        void recv_slice(uint64_t offset, std::string_view& slice)
         {
             if (on_recv_slice)
                 on_recv_slice(ctx, offset, slice);
         }
-        void http_complete(HttpContext* ctx, int status_code, const std::string& body)
+        void http_complete(const error_code& sys_error_code, int http_status_code, const std::string& body)
         {
             if (on_complete)
-                on_complete(ctx, status_code, body);
+                on_complete(ctx, sys_error_code, http_status_code, body);
         }
-
     } callback;
 
     struct
@@ -407,7 +416,8 @@ struct HttpContext : public std::enable_shared_from_this<HttpContext>
     struct
     {
         volatile bool       completed = false;
-        beast::error_code   last_error;
+        beast::error_code   sys_error_code;
+        int                 http_status_code = 0;
     } status;
 
     bool is_completed()
@@ -472,6 +482,7 @@ struct HttpContext : public std::enable_shared_from_this<HttpContext>
         const HttpCallback::OnComplete& http_finish_handler
     )
     {
+        callback.ctx = this;
         callback.on_recv_header = recv_header_handler;
         callback.on_recv_slice = recv_slice_handler;
         callback.on_complete = http_finish_handler;
@@ -511,7 +522,7 @@ struct HttpContext : public std::enable_shared_from_this<HttpContext>
     bool init(std::string_view method, const std::string* url) // url == nullptr, means reuse old url
     {
         status.completed = false;
-        status.last_error.clear();
+        status.sys_error_code.clear();
 
         response.string_body = std::make_shared<http::response_parser<http::string_body>>();
         response.buffer_body = std::make_shared<http::response_parser<http::buffer_body>>();
@@ -559,7 +570,7 @@ struct HttpContext : public std::enable_shared_from_this<HttpContext>
 
     bool finished_in_success() const
     {
-        return (status.last_error.failed() == false);
+        return (!status.sys_error_code.failed() && is_http_status_2xx(status.http_status_code));
     }
 
     int response_status_code()
@@ -603,16 +614,16 @@ struct HttpContext : public std::enable_shared_from_this<HttpContext>
         auto slice = response.slice_view();
         auto offset = response.slice_recv_bytes;
         response.slice_recv_bytes += slice.size();
-        callback.recv_slice(this, request.range_from + offset, slice);
+        callback.recv_slice(request.range_from + offset, slice);
     }
 
     void on_http_complete()
     {
         status.completed = true;
-        if (auto& last_error = status.last_error)
-            callback.http_complete(this, last_error.value(), response_body());
+        if (auto& last_error = status.sys_error_code)
+            callback.http_complete(last_error, 0, "");
         else
-            callback.http_complete(this, response_status_code(), response_body());
+            callback.http_complete(SUCCESS, response_status_code(), response_body());
     }
 
     void on_recv_header()
@@ -627,12 +638,12 @@ struct HttpContext : public std::enable_shared_from_this<HttpContext>
 
         HttpResultCache::ReportResult(request.url_string(), rc);
 
-        callback.recv_header(this, rc);
+        callback.recv_header(rc);
     }
 
     void finish_in_failure(const beast::error_code& ec, const std::string& info)
     {
-        status.last_error = ec;
+        status.sys_error_code = ec;
         on_http_complete();
         return fail(ec, info.c_str());
     }
@@ -767,7 +778,12 @@ struct HttpConnection : public std::enable_shared_from_this<HttpConnection>
         timer.cancel();
 
         if (ec)
-            return finish_in_failure(ec, "resolve");
+        {
+            if (ec == asio::error::operation_aborted)
+                return finish_in_failure(TIMEOUT_RESOLVE, "resolve");
+            else
+                return finish_in_failure(ec, "resolve");
+        }
 
         for (auto& it : results)
         {
@@ -1166,8 +1182,6 @@ struct HttpManager
 {
     HttpManager()
     {
-        // spdlog::set_pattern("%^[%l] %v%$");
-        spdlog::set_level(spdlog::level::debug);
     }
 
     void start_work_thread()
@@ -1254,13 +1268,18 @@ struct HttpManager
             }
         );
 
-        auto on_http_finish = req->callback.on_complete;
-        req->callback.on_complete = [this,client,on_http_finish](HttpContext* ctx, int status_code, const std::string& body)
+        auto origin_on_complete = req->callback.on_complete;
+        req->callback.on_complete = [this,client, origin_on_complete](HttpContext* ctx, const error_code& sys_error_code, int http_status_code, const std::string& body)
             {
-                spdlog::debug("simple::http finished:{}, status:{}, content:{}", ctx->request.url_string(), status_code, ctx->response.content_length);
+                spdlog::debug("simple::http finished:{}, error:{}, http:{}, content: {}", 
+                    ctx->request.url_string(),
+                    sys_error_code.to_string(),
+                    http_status_code, 
+                    ctx->response.content_length
+                );
                 this->recycle_http_client(client);
-                ctx->callback.on_complete = on_http_finish;
-                ctx->callback.on_complete(ctx, status_code, body);
+                ctx->callback.on_complete = origin_on_complete;
+                ctx->callback.on_complete(ctx, sys_error_code, http_status_code, body);
             };
         client->execute(req);
     }
@@ -1320,7 +1339,7 @@ struct Http
             ssl::context ssl_ctx{ ssl::context::tlsv13_client };
             SteadyTimer timer{ io_ctx };
 
-            request->callback.on_complete = [&timer](const HttpContext* ctx, int status_code, const std::string& body) {
+            request->callback.on_complete = [&timer](const HttpContext* ctx, const error_code& sys_error_code, int http_status_code, const std::string& body) {
                 timer.cancel();
                 };
 
