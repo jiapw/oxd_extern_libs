@@ -1,5 +1,9 @@
 #pragma once
+
+// tweak spdlog
 #define _SILENCE_STDEXT_ARR_ITERS_DEPRECATION_WARNING
+#define SPDLOG_LEVEL_NAMES { "TRACE", "DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL", "OFF" }
+
 #include <spdlog/spdlog.h>
 #include <spdlog/sinks/basic_file_sink.h>
 #include <spdlog/sinks/stdout_color_sinks.h>
@@ -71,7 +75,7 @@ constexpr uint64_t char_as_byte(const char* data, size_t length)
 template<size_t N>
 constexpr uint64_t short_string_to_uint64_in_compile_time(const char(&str)[N]) 
 {
-    static_assert((0<N)&&(N<9), "short_string_to_uint64_in_compile_time(const char(&str)[N]) : length of the parameter str only be from 1 to 8");
+    static_assert((0<N)&&(N<=9), "short_string_to_uint64_in_compile_time(const char(&str)[N]) : length of the parameter str only be from 1 to 8");
     return char_as_byte(str, N - 1); // N-1 to exclude null terminator
 }
 
@@ -127,8 +131,22 @@ struct Logger
 
     static std::shared_ptr<spdlog::logger> SingleInstance()
     {
-        static auto _ = std::make_shared<spdlog::logger>(GetLoggerName(), std::make_shared<spdlog::sinks::stdout_color_sink_mt>(spdlog::color_mode::always));
-        return _;
+        static struct SI
+        {
+            std::shared_ptr<spdlog::logger> logger;
+            SI()
+            {
+                auto color_sink = std::make_shared<spdlog::sinks::stdout_color_sink_mt>();
+#ifdef _WIN32
+                color_sink->set_color(spdlog::level::trace, FOREGROUND_INTENSITY);
+#else
+                color_sink->set_color(spdlog::level::trace, "\033[2m");
+#endif // DEBUG
+                logger = std::make_shared<spdlog::logger>(GetLoggerName(), color_sink);
+                logger->set_level(spdlog::level::trace);
+            }
+        } _si;
+        return _si.logger;
     }
 
     static level::level_enum Level(level::level_enum lvl)
