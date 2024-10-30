@@ -32,7 +32,7 @@ struct fmt::formatter<boost::asio::ip::basic_resolver_iterator<boost::asio::ip::
 {
     auto format(const boost::asio::ip::basic_resolver_iterator<boost::asio::ip::tcp>::value_type& A, format_context& ctx) const -> decltype(ctx.out())
     {
-        auto& ep = A.endpoint();
+        const auto& ep = A.endpoint();
         return format_to(ctx.out(), "{}->{}", A.host_name(), ep.address().to_string());
     }
 };
