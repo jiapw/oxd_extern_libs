@@ -2,7 +2,7 @@
 
 // tweak spdlog
 #define _SILENCE_STDEXT_ARR_ITERS_DEPRECATION_WARNING
-#define SPDLOG_LEVEL_NAMES { "TRACE", "DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL", "OFF" }
+#define SPDLOG_LEVEL_NAMES { "TRACE", "DEBUG", "INFOR", "WARNG", "ERROR", "CRITL", "_OFF_" }
 
 #include <spdlog/spdlog.h>
 #include <spdlog/sinks/basic_file_sink.h>
@@ -250,6 +250,7 @@ inline void test_logger()
     FOO::Warn("this is {}", "warn");
     FOO::Error("this is {}", "error");
     FOO::Critical("this is {}", "critical");
+    FOO::Log(spdlog::level::off, "this is {}", "off");
 
     LOG_DEFINE(FOO);
     FOO::Info("We can define LOG_DEFINE(FOO) multiple times!");

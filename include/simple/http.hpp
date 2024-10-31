@@ -88,6 +88,9 @@ enum class HttpErrorCode {
     FAILED_READ,
     FAILED_WRITE,
 
+    FAILED_REDIRECT_COUNT,
+    FAILED_REDIRECT_LOCATION,
+
     BLOCKED_BY_CONFIG   = 0X3001,
     BLOCKED_BY_FAILURE_CACHE,
 };
@@ -150,6 +153,8 @@ const error_code TIMEOUT_WRITE_REQUEST          = HttpErrorCategory::make_error_
 const error_code TIMEOUT_READ_RESPONSE_HEADER   = HttpErrorCategory::make_error_code(HttpErrorCode::TIMEOUT_READ_RESPONSE_HEADER);
 const error_code TIMEOUT_READ_RESPONSE_BODY     = HttpErrorCategory::make_error_code(HttpErrorCode::TIMEOUT_READ_RESPONSE_BODY);
 const error_code TIMEOUT_READ_RESPONSE_SLICE    = HttpErrorCategory::make_error_code(HttpErrorCode::TIMEOUT_READ_RESPONSE_SLICE);
+const error_code FAILED_REDIRECT_COUNT          = HttpErrorCategory::make_error_code(HttpErrorCode::FAILED_REDIRECT_COUNT);
+const error_code FAILED_REDIRECT_LOCATION       = HttpErrorCategory::make_error_code(HttpErrorCode::FAILED_REDIRECT_LOCATION);
 const error_code BLOCKED_BY_CONFIG              = HttpErrorCategory::make_error_code(HttpErrorCode::BLOCKED_BY_CONFIG);
 const error_code BLOCKED_BY_FAILURE_CACHE       = HttpErrorCategory::make_error_code(HttpErrorCode::BLOCKED_BY_FAILURE_CACHE);
 
@@ -429,6 +434,7 @@ struct HttpContext : public std::enable_shared_from_this<HttpContext>
         uint64_t    string_body_limit = 32 * 1024 * 1024;   // 32M
 
         int         redirect_limit = 1;             // the number of http redirects allowed
+        int         log_slice_interval_ms = 100;    // less than 0: never;     equal to 0: always;
         
         
     } config;
@@ -440,6 +446,7 @@ struct HttpContext : public std::enable_shared_from_this<HttpContext>
         int                 http_status_code = 0;
         int                 response_version = 10;
         int                 redirect_count = 0;
+        int64_t             last_log_timrstamp = 0;
     } status;
 
     bool is_completed()
@@ -558,7 +565,11 @@ struct HttpContext : public std::enable_shared_from_this<HttpContext>
         {
             if (!request.url.set(*url))
             {
-                finish_in_failure(INVALID_URL, "parse url");
+                SMP_HTTP::Warn(
+                    "failed in parse url: \"{}\", caused by: {}",
+                    *url,
+                    INVALID_URL.message()
+                );
                 return false;
             }
         }
@@ -633,6 +644,19 @@ struct HttpContext : public std::enable_shared_from_this<HttpContext>
 
     void on_recv_slice()
     {
+        if (auto now = simple::ms::now(); config.log_slice_interval_ms == 0 || (status.last_log_timrstamp + config.log_slice_interval_ms) < now)
+        {
+            SMP_HTTP::Trace(
+                "recv slice: {} {}, ({}|{}):{}",
+                request.method,
+                request.url.to_url(),
+                response.content_length,
+                response.slice_recv_bytes,
+                response.slice_view().size()
+            );
+            status.last_log_timrstamp = now;
+        }
+
         auto slice = response.slice_view();
         auto offset = response.slice_recv_bytes;
         response.slice_recv_bytes += slice.size();
@@ -736,9 +760,10 @@ struct HttpConnection : public std::enable_shared_from_this<HttpConnection>
 
     std::string to_string(int level = 0)
     {
-        std::string  s;
-        s = fmt::format("HttpConnection object:{}, is_reusable:{}", (void*)this, is_reusable);
-        return s;
+        if (level == 1)
+            return fmt::format("HttpConnection(addr:{}, is_reusable:{})", (void*)this, is_reusable);
+        
+        return fmt::format("HttpConnection({})", (void*)this);
     }
 
     inline beast::tcp_stream& get_tcp_stream()
@@ -769,7 +794,12 @@ struct HttpConnection : public std::enable_shared_from_this<HttpConnection>
         if (HttpResultCache::IsFreezed(ctx->request.url_string()))
             return finish_in_failure(BLOCKED_BY_FAILURE_CACHE, "http_client::execute");
 
-        SMP_HTTP::Trace("HttpConnection::execute : {}", this->to_string());
+        SMP_HTTP::Trace(
+            "{} execute: {} {}",
+            this->to_string(),
+            ctx->request.method,
+            ctx->request.url_string()
+        );
 
         if (is_reusable)
         {
@@ -820,13 +850,24 @@ struct HttpConnection : public std::enable_shared_from_this<HttpConnection>
 
         if (ec)
         {
+            SMP_HTTP::Trace(
+                "{} failed in resolve: {}, caused by: {}",
+                this->to_string(),
+                http_ctx->request.url.host,
+                ec.message()
+            );
+
             if (ec == asio::error::operation_aborted)
                 return finish_in_failure(TIMEOUT_RESOLVE, "resolve");
             else
                 return finish_in_failure(ec, "resolve");
         }
 
-        SMP_HTTP::Trace("resolve result: [{}]", fmt::join(results, ", "));
+        SMP_HTTP::Trace(
+            "{} resolve result: [{}]", 
+            this->to_string(),
+            fmt::join(results, ", ")
+        );
 
         get_tcp_stream().async_connect(
                 results,
@@ -851,7 +892,16 @@ struct HttpConnection : public std::enable_shared_from_this<HttpConnection>
         timer.cancel();
 
         if (ec)
+        {
+            SMP_HTTP::Trace(
+                "{} failed in connect: {}:{}, caused by: {}",
+                this->to_string(),
+                http_ctx->request.url.host,
+                http_ctx->request.url.port,
+                ec.message()
+            );
             return finish_in_failure(ec, "connect");
+        }
 
         if (is_https_request)
         {
@@ -866,7 +916,7 @@ struct HttpConnection : public std::enable_shared_from_this<HttpConnection>
                 [this](const boost::system::error_code& ec)
                 {
                     if (ec != boost::asio::error::operation_aborted)
-                        tcp_stream_ptr->close(); // cancel async_connect
+                        get_tcp_stream().close(); // cancel async_connect
                 }
             );
         }
@@ -882,6 +932,12 @@ struct HttpConnection : public std::enable_shared_from_this<HttpConnection>
 
         if (ec)
         {
+            SMP_HTTP::Trace(
+                "{} failed in handshake: {}, caused by: {}",
+                this->to_string(),
+                http_ctx->request.url.host,
+                ec.message()
+            );
             HttpResultCache::ReportResult(http_ctx->request.url_string(), ec.value());
             return finish_in_failure(ec, "handshake");
         }
@@ -1092,11 +1148,19 @@ struct HttpConnection : public std::enable_shared_from_this<HttpConnection>
         if (ec)
             return finish_in_failure(ec, "read response body");
 
-        SMP_HTTP::Trace("read whole body, url:{}, size:{}",
+        SMP_HTTP::Trace("{} completed request: {} {} => [{}] {} Bytes",
+            this->to_string(),
+            http_ctx->request.method,
             http_ctx->request.url.to_url(),
+            http_ctx->status.http_status_code,
             http_ctx->response.string_body->get().body().size()
         );
         
+        handle_response_finish();
+    }
+
+    void handle_response_finish()
+    {
         auto& status = http_ctx->status;
 
         // 2xx
@@ -1104,15 +1168,17 @@ struct HttpConnection : public std::enable_shared_from_this<HttpConnection>
             return finish_in_success();
 
         // 3xx, redirect?
-        if (is_http_status_3xx(status.http_status_code) 
-            && (status.redirect_count < http_ctx->config.redirect_limit))
+        if (is_http_status_3xx(status.http_status_code))
         {
+            if (status.redirect_count > http_ctx->config.redirect_limit)
+                return finish_in_failure(FAILED_REDIRECT_COUNT, "redirect too many times");
+
             status.redirect_count++;
 
             std::string location = http_ctx->response_location();
             Url url_b;
             if (!url_b.set(location))
-                return finish_in_failure(ec, "redirect location invalid");
+                return finish_in_failure(FAILED_REDIRECT_LOCATION, "redirect location invalid");
 
 
             // http 1.1 && same endpoint
@@ -1129,10 +1195,7 @@ struct HttpConnection : public std::enable_shared_from_this<HttpConnection>
                 http_ctx->re_init(location);
                 execute(http_ctx);
             }
-
         }
-
-        
     }
 
     void async_read_response_body_slice()
@@ -1188,14 +1251,22 @@ struct HttpConnection : public std::enable_shared_from_this<HttpConnection>
         }
 
         if (ec)
+        {
+            SMP_HTTP::Trace(
+                "{} read response slice failed: {}, {}",
+                this->to_string(),
+                http_ctx->request.url.host,
+                ec.message()
+            );
             return finish_in_failure(ec, "read response slice");
+        }
 
         http_ctx->on_recv_slice();
 
         if (http_ctx->response.buffer_body->is_done())
-            return finish_in_success();
-
-        async_read_response_body_slice();
+            handle_response_finish();
+        else
+            async_read_response_body_slice();
     }
 };
 

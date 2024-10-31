@@ -8,6 +8,8 @@
 //const std::string url = "https://cls.2ndu.com/chunk-store/v1/hv?file_id=ab7cb16a9a44d65c0ff524fc7518909f0fd4a3314aecd38ecc53c7a94ff0d4c9";
 const std::string url = "https://video1.2ndu.com/16MB/4x4_0.bin";
 
+LOG_DEFINE(HttpTest);
+
 void test_http_tools()
 {
 	if(1)
@@ -36,6 +38,7 @@ void test_http_tools()
 	}
 }
 
+#define BLOCK_READ
 void test_http_manager()
 {
 	
@@ -46,10 +49,11 @@ void test_http_manager()
 		"https://video1.21ndu.com/16MB/4x4_0.bin",
 		"https://video1.2ndu.com/16MB/4x4_1.bin",
 		"https://video1.2ndu.com/16MB/4x4_4.bin",
-		"https://video1.2ndu.com/16MB/4x4_2.bin"
+		"https://video1.2ndu.com/16MB/4x4_2.bin",
+		"https://code.visualstudio.com/sha/download?build=stable&os=win32-x64-user",
 	};
 
-	for (auto i =0 ;i<4;i++)
+	for (auto i =0 ;i<urls.size();i++)
 	{
 		simple::ms::timestamp tm;
 
@@ -59,13 +63,18 @@ void test_http_manager()
 			auto  http_req = simple::HttpContext::create(urls[i],
 				[](const simple::HttpContext* ctx, int status_code)->void
 				{
-					printf("recv header:\n status code:%d \n content length:%lld \n", status_code, ctx->response.content_length);
+					HttpTest::Info(
+						"recv header: {} status code:{} content length:{}",
+						ctx->request.url_string(),
+						status_code, 
+						ctx->response.content_length
+					);
 				},
 
 #if defined(BLOCK_READ)
-				[](const simple::http_context* ctx, uint64_t offset, std::string_view& slice)->void
+				[](const simple::HttpContext* ctx, uint64_t offset, std::string_view& slice)->void
 				{
-					printf("recv block: offset: %lld, size:%lld \n", offset, slice.size());
+					// todo
 				},
 #else
 				nullptr,
@@ -73,8 +82,25 @@ void test_http_manager()
 
 				[](const simple::HttpContext* ctx, const simple::error_code& sys_error_code, int http_status_code, const std::string& body)->void
 				{
-					assert(simple::is_http_status_2xx(http_status_code));
-					printf("http finish:\n status code:%d, total size:%lld \n", http_status_code, ctx->response.content_length);
+					if (simple::is_http_status_2xx(http_status_code))
+					{
+						HttpTest::Info(
+							"recv body: {} status code:{} content length:{}",
+							ctx->request.url_string(),
+							http_status_code,
+							ctx->response.content_length
+						);
+					}
+					else
+					{
+						HttpTest::Error(
+							"recv body: {} status code:{} content length:{} RC:{}",
+							ctx->request.url_string(),
+							http_status_code,
+							ctx->response.content_length,
+							sys_error_code.message()
+						);
+					}
 				}
 
 			);
@@ -103,7 +129,7 @@ void test_http_error_code()
 		http_mngr.start_work_thread();
 		{
 			auto http_req = simple::HttpContext::create(
-				"http://bing.com",
+				"http://www.baidu.com",
 				nullptr,
 				nullptr,
 				[](simple::HttpContext* ctx, const simple::error_code& sys_error_code, int http_status_code, const std::string& body) 
@@ -127,10 +153,10 @@ void test_http_error_code()
 
 int main()
 {
-	//simple::test_logger()
-	test_http_error_code();
+	//simple::test_logger();
+	//test_http_error_code();
 	//test_http_tools();
-	//test_http_manager();
+	test_http_manager();
 
 	return 0;
 }
