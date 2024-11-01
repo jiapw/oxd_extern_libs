@@ -46,11 +46,12 @@ void test_http_manager()
 	http_mngr.start_work_thread();
 
 	std::vector<std::string> urls = {
-		"https://video1.21ndu.com/16MB/4x4_0.bin",
+		"http://bing.com",
+		"https://video1.2ndu.com/16MB/4x4_0.bin",
 		"https://video1.2ndu.com/16MB/4x4_1.bin",
 		"https://video1.2ndu.com/16MB/4x4_4.bin",
 		"https://video1.2ndu.com/16MB/4x4_2.bin",
-		"https://code.visualstudio.com/sha/download?build=stable&os=win32-x64-user",
+		//"https://code.visualstudio.com/sha/download?build=stable&os=win32-x64-user",
 	};
 
 	for (auto i =0 ;i<urls.size();i++)
@@ -82,22 +83,23 @@ void test_http_manager()
 
 				[](const simple::HttpContext* ctx, const simple::error_code& sys_error_code, int http_status_code, const std::string& body)->void
 				{
+					auto recv_size = body.size() ? body.size() : ctx->response.slice_recv_bytes;
 					if (simple::is_http_status_2xx(http_status_code))
 					{
 						HttpTest::Info(
-							"recv body: {} status code:{} content length:{}",
+							"recv body: {} status code:{} content recv:{}",
 							ctx->request.url_string(),
 							http_status_code,
-							ctx->response.content_length
+							recv_size
 						);
 					}
 					else
 					{
-						HttpTest::Error(
-							"recv body: {} status code:{} content length:{} RC:{}",
+						HttpTest::Warn(
+							"recv body: {} status code:{} content recv:{} RC:{}",
 							ctx->request.url_string(),
 							http_status_code,
-							ctx->response.content_length,
+							recv_size,
 							sys_error_code.message()
 						);
 					}

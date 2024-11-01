@@ -33,7 +33,8 @@ struct fmt::formatter<boost::asio::ip::basic_resolver_iterator<boost::asio::ip::
     auto format(const boost::asio::ip::basic_resolver_iterator<boost::asio::ip::tcp>::value_type& A, format_context& ctx) const -> decltype(ctx.out())
     {
         const auto& ep = A.endpoint();
-        return format_to(ctx.out(), "{}->{}", A.host_name(), ep.address().to_string());
+        //return format_to(ctx.out(), "{}->{}", A.host_name(), ep.address().to_string());
+        return format_to(ctx.out(), "{}", ep.address().to_string());
     }
 };
 
@@ -850,7 +851,7 @@ struct HttpConnection : public std::enable_shared_from_this<HttpConnection>
 
         if (ec)
         {
-            SMP_HTTP::Trace(
+            SMP_HTTP::Warn(
                 "{} failed in resolve: {}, caused by: {}",
                 this->to_string(),
                 http_ctx->request.url.host,
@@ -864,8 +865,9 @@ struct HttpConnection : public std::enable_shared_from_this<HttpConnection>
         }
 
         SMP_HTTP::Trace(
-            "{} resolve result: [{}]", 
+            "{} resolve {}, result: [{}]", 
             this->to_string(),
+            results.begin()->host_name(),
             fmt::join(results, ", ")
         );
 
@@ -893,7 +895,7 @@ struct HttpConnection : public std::enable_shared_from_this<HttpConnection>
 
         if (ec)
         {
-            SMP_HTTP::Trace(
+            SMP_HTTP::Warn(
                 "{} failed in connect: {}:{}, caused by: {}",
                 this->to_string(),
                 http_ctx->request.url.host,
@@ -932,7 +934,7 @@ struct HttpConnection : public std::enable_shared_from_this<HttpConnection>
 
         if (ec)
         {
-            SMP_HTTP::Trace(
+            SMP_HTTP::Warn(
                 "{} failed in handshake: {}, caused by: {}",
                 this->to_string(),
                 http_ctx->request.url.host,
@@ -1086,9 +1088,16 @@ struct HttpConnection : public std::enable_shared_from_this<HttpConnection>
         timer.cancel();
 
         if (ec)
+        {
+            SMP_HTTP::Warn(
+                "{} failed in read response header: {}, caused by: {}",
+                this->to_string(),
+                http_ctx->request.url_string(),
+                ec.message()
+            );
             return finish_in_failure(ec, "read response header");
+        }
 
-        // TBD
         http_ctx->on_recv_header();
 
         if (http_ctx->is_slice_mode())
@@ -1180,6 +1189,12 @@ struct HttpConnection : public std::enable_shared_from_this<HttpConnection>
             if (!url_b.set(location))
                 return finish_in_failure(FAILED_REDIRECT_LOCATION, "redirect location invalid");
 
+            SMP_HTTP::Trace("{} redirect: {} => {}",
+                this->to_string(),
+                http_ctx->request.url.to_url(),
+                location
+            );
+
 
             // http 1.1 && same endpoint
             if (status.response_version == 11
@@ -1195,11 +1210,17 @@ struct HttpConnection : public std::enable_shared_from_this<HttpConnection>
                 http_ctx->re_init(location);
                 execute(http_ctx);
             }
+
+            return;
         }
+
+        return finish_in_success();
     }
 
     void async_read_response_body_slice()
     {
+        if (http_ctx->response.buffer_body->is_done())
+            return handle_response_finish();
 
         http_ctx->response.prepare_slice_memory();
 
@@ -1329,6 +1350,7 @@ struct HttpManager
 {
     HttpManager()
     {
+        /*
         ssl_ctx.set_options(
             ssl::context::default_workarounds |
             ssl::context::no_sslv2 |
@@ -1336,6 +1358,7 @@ struct HttpManager
             ssl::context::no_tlsv1 |
             ssl::context::no_tlsv1_1
         );
+        */
     }
 
     void start_work_thread()
@@ -1478,7 +1501,7 @@ struct HttpManager
 
 protected:
     asio::io_context io_ctx;
-    ssl::context ssl_ctx{ ssl::context::tlsv12_client };
+    ssl::context ssl_ctx{ ssl::context::tls_client };
     std::shared_ptr<IOContextWorker> worker;
     std::unordered_multimap<std::string, std::shared_ptr<HttpConnection>> http_client_pool;
 };
