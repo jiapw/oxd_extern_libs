@@ -722,6 +722,11 @@ struct SteadyTimer : public boost::asio::steady_timer
         boost::asio::steady_timer::expires_after(std::chrono::milliseconds(timeout_ms));
         async_wait(token);
     }
+    void cancel()
+    {
+        boost::system::error_code ec;
+        boost::asio::steady_timer::cancel(ec);
+    }
 };
 
 struct HttpConnection : public std::enable_shared_from_this<HttpConnection>
@@ -828,20 +833,19 @@ struct HttpConnection : public std::enable_shared_from_this<HttpConnection>
             tcp_stream_ptr = std::make_shared<http_stream>(ioc_ctx);
         }
 
-        resolver.async_resolve(
-            http_ctx->request.url.host,
-            http_ctx->request.url.port,
-            beast::bind_front_handler(&HttpConnection::on_resolve, shared_from_this())
-        );
-
-        
-        timer.expires_after( 
+        timer.expires_after(
             http_ctx->config.resolve_timeout,
             [this](const boost::system::error_code& ec)
             {
                 if (ec != boost::asio::error::operation_aborted)
                     resolver.cancel(); // cancel async_resolve
             }
+        );
+
+        resolver.async_resolve(
+            http_ctx->request.url.host,
+            http_ctx->request.url.port,
+            beast::bind_front_handler(&HttpConnection::on_resolve, shared_from_this())
         );
     }
 
@@ -871,11 +875,6 @@ struct HttpConnection : public std::enable_shared_from_this<HttpConnection>
             fmt::join(results, ", ")
         );
 
-        get_tcp_stream().async_connect(
-                results,
-                beast::bind_front_handler(&HttpConnection::on_connect, shared_from_this())
-        );
-        
         timer.expires_after(
             http_ctx->config.connect_timeout,
             [this](const boost::system::error_code& ec)
@@ -884,8 +883,13 @@ struct HttpConnection : public std::enable_shared_from_this<HttpConnection>
                 {
                     get_tcp_stream().close(); // cancel async_connect
                 }
-                    
+
             }
+        );
+
+        get_tcp_stream().async_connect(
+                results,
+                beast::bind_front_handler(&HttpConnection::on_connect, shared_from_this())
         );
     }
 
@@ -907,12 +911,6 @@ struct HttpConnection : public std::enable_shared_from_this<HttpConnection>
 
         if (is_https_request)
         {
-            // Perform the SSL handshake
-            ssl_stream_ptr->async_handshake(
-                ssl::stream_base::client,
-                beast::bind_front_handler(&HttpConnection::on_handshake, shared_from_this())
-            );
-
             timer.expires_after(
                 http_ctx->config.handshake_timeout,
                 [this](const boost::system::error_code& ec)
@@ -921,6 +919,13 @@ struct HttpConnection : public std::enable_shared_from_this<HttpConnection>
                         get_tcp_stream().close(); // cancel async_connect
                 }
             );
+
+            // Perform the SSL handshake
+            ssl_stream_ptr->async_handshake(
+                ssl::stream_base::client,
+                beast::bind_front_handler(&HttpConnection::on_handshake, shared_from_this())
+            );
+
         }
         else
         {
@@ -985,12 +990,6 @@ struct HttpConnection : public std::enable_shared_from_this<HttpConnection>
 
         if (is_https_request)
         {
-            http::async_write(
-                *ssl_stream_ptr,
-                http_ctx->request.body,
-                beast::bind_front_handler(&HttpConnection::on_write_request, shared_from_this())
-            );
-
             timer.expires_after(
                 http_ctx->config.write_timeout,
                 [this](const boost::system::error_code& ec)
@@ -999,15 +998,16 @@ struct HttpConnection : public std::enable_shared_from_this<HttpConnection>
                         ssl_stream_ptr->next_layer().close(); // cancel async_write
                 }
             );
-        }
-        else
-        {
+
             http::async_write(
-                *tcp_stream_ptr,
+                *ssl_stream_ptr,
                 http_ctx->request.body,
                 beast::bind_front_handler(&HttpConnection::on_write_request, shared_from_this())
             );
 
+        }
+        else
+        {
             timer.expires_after(
                 http_ctx->config.write_timeout,
                 [this](const boost::system::error_code& ec)
@@ -1016,6 +1016,13 @@ struct HttpConnection : public std::enable_shared_from_this<HttpConnection>
                         tcp_stream_ptr->close(); // cancel async_write
                 }
             );
+
+            http::async_write(
+                *tcp_stream_ptr,
+                http_ctx->request.body,
+                beast::bind_front_handler(&HttpConnection::on_write_request, shared_from_this())
+            );
+
         }
     }
 
@@ -1030,21 +1037,6 @@ struct HttpConnection : public std::enable_shared_from_this<HttpConnection>
 
         if (is_https_request)
         {
-            if (http_ctx->is_slice_mode())
-                http::async_read_header(
-                    *ssl_stream_ptr,
-                    buffer,
-                    *http_ctx->response.buffer_body,
-                    beast::bind_front_handler(&HttpConnection::on_read_response_header, shared_from_this())
-                );
-            else
-                http::async_read_header(
-                    *ssl_stream_ptr,
-                    buffer,
-                    *http_ctx->response.string_body,
-                    beast::bind_front_handler(&HttpConnection::on_read_response_header, shared_from_this())
-                );
-
             timer.expires_after(
                 http_ctx->config.read_response_header_timeout,
                 [this](const boost::system::error_code& ec)
@@ -1053,9 +1045,34 @@ struct HttpConnection : public std::enable_shared_from_this<HttpConnection>
                         ssl_stream_ptr->next_layer().close(); // cancel async_write
                 }
             );
+
+            if (http_ctx->is_slice_mode())
+                http::async_read_header(
+                    *ssl_stream_ptr,
+                    buffer,
+                    *http_ctx->response.buffer_body,
+                    beast::bind_front_handler(&HttpConnection::on_read_response_header, shared_from_this())
+                );
+            else
+                http::async_read_header(
+                    *ssl_stream_ptr,
+                    buffer,
+                    *http_ctx->response.string_body,
+                    beast::bind_front_handler(&HttpConnection::on_read_response_header, shared_from_this())
+                );
+
         }
         else
         {
+            timer.expires_after(
+                http_ctx->config.read_response_header_timeout,
+                [this](const boost::system::error_code& ec)
+                {
+                    if (ec != boost::asio::error::operation_aborted)
+                        tcp_stream_ptr->close(); // cancel async_write
+                }
+            );
+
             if (http_ctx->is_slice_mode())
                 http::async_read_header(
                     *tcp_stream_ptr,
@@ -1071,14 +1088,6 @@ struct HttpConnection : public std::enable_shared_from_this<HttpConnection>
                     beast::bind_front_handler(&HttpConnection::on_read_response_header, shared_from_this())
                 );
 
-            timer.expires_after(
-                http_ctx->config.read_response_header_timeout,
-                [this](const boost::system::error_code& ec)
-                {
-                    if (ec != boost::asio::error::operation_aborted)
-                        tcp_stream_ptr->close(); // cancel async_write
-                }
-            );
         }
 
     }
@@ -1111,13 +1120,6 @@ struct HttpConnection : public std::enable_shared_from_this<HttpConnection>
     {
         if (is_https_request)
         {
-            http::async_read(
-                *ssl_stream_ptr,
-                buffer,
-                *http_ctx->response.string_body,
-                beast::bind_front_handler(&HttpConnection::on_read_response_body, shared_from_this())
-            );
-
             timer.expires_after(
                 http_ctx->config.read_response_body_timeout,
                 [this](const boost::system::error_code& ec)
@@ -1126,16 +1128,17 @@ struct HttpConnection : public std::enable_shared_from_this<HttpConnection>
                         ssl_stream_ptr->next_layer().close(); // cancel async_write
                 }
             );
-        }
-        else
-        {
+
             http::async_read(
-                *tcp_stream_ptr,
+                *ssl_stream_ptr,
                 buffer,
                 *http_ctx->response.string_body,
                 beast::bind_front_handler(&HttpConnection::on_read_response_body, shared_from_this())
             );
 
+        }
+        else
+        {
             timer.expires_after(
                 http_ctx->config.read_response_body_timeout,
                 [this](const boost::system::error_code& ec)
@@ -1144,6 +1147,14 @@ struct HttpConnection : public std::enable_shared_from_this<HttpConnection>
                         tcp_stream_ptr->close(); // cancel async_write
                 }
             );
+
+            http::async_read(
+                *tcp_stream_ptr,
+                buffer,
+                *http_ctx->response.string_body,
+                beast::bind_front_handler(&HttpConnection::on_read_response_body, shared_from_this())
+            );
+
         }
     }
 
@@ -1226,13 +1237,6 @@ struct HttpConnection : public std::enable_shared_from_this<HttpConnection>
 
         if (is_https_request)
         {
-            http::async_read_some(
-                *ssl_stream_ptr,
-                buffer,
-                *http_ctx->response.buffer_body,
-                beast::bind_front_handler(&HttpConnection::on_read_response_slice, shared_from_this())
-            );
-
             timer.expires_after(
                 http_ctx->config.read_response_chunk_timeout,
                 [this](const boost::system::error_code& ec)
@@ -1241,16 +1245,17 @@ struct HttpConnection : public std::enable_shared_from_this<HttpConnection>
                         ssl_stream_ptr->next_layer().close(); // cancel async_read_some
                 }
             );
-        }
-        else
-        {
+
             http::async_read_some(
-                *tcp_stream_ptr,
+                *ssl_stream_ptr,
                 buffer,
                 *http_ctx->response.buffer_body,
                 beast::bind_front_handler(&HttpConnection::on_read_response_slice, shared_from_this())
             );
 
+        }
+        else
+        {
             timer.expires_after(
                 http_ctx->config.read_response_chunk_timeout,
                 [this](const boost::system::error_code& ec)
@@ -1259,6 +1264,14 @@ struct HttpConnection : public std::enable_shared_from_this<HttpConnection>
                         tcp_stream_ptr->close(); // cancel async_read_some
                 }
             );
+
+            http::async_read_some(
+                *tcp_stream_ptr,
+                buffer,
+                *http_ctx->response.buffer_body,
+                beast::bind_front_handler(&HttpConnection::on_read_response_slice, shared_from_this())
+            );
+
         }
     }
 
