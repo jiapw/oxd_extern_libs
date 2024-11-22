@@ -1010,10 +1010,10 @@ struct HttpConnection : public std::enable_shared_from_this<HttpConnection>
         {
             timer.expires_after(
                 http_ctx->config.write_timeout,
-                [this](const boost::system::error_code& ec)
+                [self = shared_from_this()](const boost::system::error_code& ec)
                 {
                     if (ec != boost::asio::error::operation_aborted)
-                        tcp_stream_ptr->close(); // cancel async_write
+                        self->tcp_stream_ptr->close(); // cancel async_write
                 }
             );
 
@@ -1359,7 +1359,7 @@ if (!in_work_thread()) \
     spdlog::critical("recycle_http_client NOT in work thread!"); \
 }
 
-struct HttpManager
+struct HttpManager : public std::enable_shared_from_this<HttpManager>
 {
     HttpManager()
     {
@@ -1411,9 +1411,9 @@ struct HttpManager
 
         timer->expires_after(
             timeout_ms,
-            [this, timeout_ms, f, timer](const boost::system::error_code& ec)
+            [self = shared_from_this(), timeout_ms, f, timer](const boost::system::error_code& ec)
             {
-                _thread_timer_func(ec, timeout_ms, f, timer);
+                self->_thread_timer_func(ec, timeout_ms, f, timer);
             }
         );
     }
@@ -1424,9 +1424,9 @@ struct HttpManager
 
         timer->expires_after(
             timeout_ms,
-            [this, timeout_ms, f, timer](const boost::system::error_code& ec) 
+            [self = shared_from_this(), timeout_ms, f, timer](const boost::system::error_code& ec)
             {
-                _thread_timer_func(ec, timeout_ms, f, timer);
+                self->_thread_timer_func(ec, timeout_ms, f, timer);
             }
         );
 
