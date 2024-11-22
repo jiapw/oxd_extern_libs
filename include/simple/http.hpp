@@ -835,10 +835,10 @@ struct HttpConnection : public std::enable_shared_from_this<HttpConnection>
 
         timer.expires_after(
             http_ctx->config.resolve_timeout,
-            [this](const boost::system::error_code& ec)
+            [self = shared_from_this()](const boost::system::error_code& ec)
             {
                 if (ec != boost::asio::error::operation_aborted)
-                    resolver.cancel(); // cancel async_resolve
+                    self->resolver.cancel(); // cancel async_resolve
             }
         );
 
@@ -877,11 +877,11 @@ struct HttpConnection : public std::enable_shared_from_this<HttpConnection>
 
         timer.expires_after(
             http_ctx->config.connect_timeout,
-            [this](const boost::system::error_code& ec)
+            [self = shared_from_this()](const boost::system::error_code& ec)
             {
                 if (ec != boost::asio::error::operation_aborted)
                 {
-                    get_tcp_stream().close(); // cancel async_connect
+                    self->get_tcp_stream().close(); // cancel async_connect
                 }
 
             }
@@ -913,10 +913,10 @@ struct HttpConnection : public std::enable_shared_from_this<HttpConnection>
         {
             timer.expires_after(
                 http_ctx->config.handshake_timeout,
-                [this](const boost::system::error_code& ec)
+                [self = shared_from_this()](const boost::system::error_code& ec)
                 {
                     if (ec != boost::asio::error::operation_aborted)
-                        get_tcp_stream().close(); // cancel async_connect
+                        self->get_tcp_stream().close(); // cancel async_connect
                 }
             );
 
@@ -992,10 +992,10 @@ struct HttpConnection : public std::enable_shared_from_this<HttpConnection>
         {
             timer.expires_after(
                 http_ctx->config.write_timeout,
-                [this](const boost::system::error_code& ec)
+                [self = shared_from_this()](const boost::system::error_code& ec)
                 {
                     if (ec != boost::asio::error::operation_aborted)
-                        ssl_stream_ptr->next_layer().close(); // cancel async_write
+                        self->ssl_stream_ptr->next_layer().close(); // cancel async_write
                 }
             );
 
@@ -1039,10 +1039,10 @@ struct HttpConnection : public std::enable_shared_from_this<HttpConnection>
         {
             timer.expires_after(
                 http_ctx->config.read_response_header_timeout,
-                [this](const boost::system::error_code& ec)
+                [self = shared_from_this()](const boost::system::error_code& ec)
                 {
                     if (ec != boost::asio::error::operation_aborted)
-                        ssl_stream_ptr->next_layer().close(); // cancel async_write
+                        self->ssl_stream_ptr->next_layer().close(); // cancel async_write
                 }
             );
 
@@ -1066,10 +1066,10 @@ struct HttpConnection : public std::enable_shared_from_this<HttpConnection>
         {
             timer.expires_after(
                 http_ctx->config.read_response_header_timeout,
-                [this](const boost::system::error_code& ec)
+                [self = shared_from_this()](const boost::system::error_code& ec)
                 {
                     if (ec != boost::asio::error::operation_aborted)
-                        tcp_stream_ptr->close(); // cancel async_write
+                        self->tcp_stream_ptr->close(); // cancel async_write
                 }
             );
 
@@ -1122,10 +1122,10 @@ struct HttpConnection : public std::enable_shared_from_this<HttpConnection>
         {
             timer.expires_after(
                 http_ctx->config.read_response_body_timeout,
-                [this](const boost::system::error_code& ec)
+                [self = shared_from_this()](const boost::system::error_code& ec)
                 {
                     if (ec != boost::asio::error::operation_aborted)
-                        ssl_stream_ptr->next_layer().close(); // cancel async_write
+                        self->ssl_stream_ptr->next_layer().close(); // cancel async_write
                 }
             );
 
@@ -1141,10 +1141,10 @@ struct HttpConnection : public std::enable_shared_from_this<HttpConnection>
         {
             timer.expires_after(
                 http_ctx->config.read_response_body_timeout,
-                [this](const boost::system::error_code& ec)
+                [self = shared_from_this()](const boost::system::error_code& ec)
                 {
                     if (ec != boost::asio::error::operation_aborted)
-                        tcp_stream_ptr->close(); // cancel async_write
+                        self->tcp_stream_ptr->close(); // cancel async_write
                 }
             );
 
@@ -1239,10 +1239,10 @@ struct HttpConnection : public std::enable_shared_from_this<HttpConnection>
         {
             timer.expires_after(
                 http_ctx->config.read_response_chunk_timeout,
-                [this](const boost::system::error_code& ec)
+                [self = shared_from_this()](const boost::system::error_code& ec)
                 {
                     if (ec != boost::asio::error::operation_aborted)
-                        ssl_stream_ptr->next_layer().close(); // cancel async_read_some
+                        self->ssl_stream_ptr->next_layer().close(); // cancel async_read_some
                 }
             );
 
@@ -1258,10 +1258,10 @@ struct HttpConnection : public std::enable_shared_from_this<HttpConnection>
         {
             timer.expires_after(
                 http_ctx->config.read_response_chunk_timeout,
-                [this](const boost::system::error_code& ec)
+                [self = shared_from_this()](const boost::system::error_code& ec)
                 {
                     if (ec != boost::asio::error::operation_aborted)
-                        tcp_stream_ptr->close(); // cancel async_read_some
+                        self->tcp_stream_ptr->close(); // cancel async_read_some
                 }
             );
 
