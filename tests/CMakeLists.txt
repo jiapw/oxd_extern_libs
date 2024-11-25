@@ -27,6 +27,16 @@ add_executable (test_http
 	"http.cpp"
 )
 
+if (NOT MSVC)
+  # Unicode is always supported on compilers other than MSVC.
+elseif (FMT_UNICODE)
+  # Unicode support requires compiling with /utf-8.
+  target_compile_options(test_http PUBLIC $<$<AND:$<COMPILE_LANGUAGE:CXX>,$<CXX_COMPILER_ID:MSVC>>:/utf-8>)
+else ()
+  target_compile_definitions(test_http PUBLIC FMT_UNICODE=0)
+endif ()
+
+
 target_link_libraries (test_http PRIVATE
 	"libcrypto.lib"
 	"libssl.lib"

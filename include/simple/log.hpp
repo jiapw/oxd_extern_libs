@@ -1,7 +1,7 @@
 #pragma once
 
 // tweak spdlog
-#define _SILENCE_STDEXT_ARR_ITERS_DEPRECATION_WARNING
+#define FMT_HEADER_ONLY
 #define SPDLOG_LEVEL_NAMES { "TRACE", "DEBUG", "INFOR", "WARNG", "ERROR", "CRITL", "_OFF_" }
 
 #include <spdlog/spdlog.h>
@@ -242,8 +242,8 @@ inline void test_logger()
     FOO::FileSink();
     FOO::FileSink("foo.log");
 
-    FOO::Log(spdlog::level::info, "start with level({})", FOO::Level());
-    FOO::Log(spdlog::level::info, "set level({})", FOO::Level(spdlog::level::trace));
+    FOO::Log(spdlog::level::info, "start with level({})", (int)FOO::Level());
+    FOO::Log(spdlog::level::info, "set level({})", (int)FOO::Level(spdlog::level::trace));
     FOO::Trace("this is {}", "trace");
     FOO::Debug("this is {}", "debug");
     FOO::Info("this is {}", "info");
