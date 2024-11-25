@@ -648,7 +648,7 @@ struct HttpContext : public std::enable_shared_from_this<HttpContext>
         if (auto now = simple::ms::now(); config.log_slice_interval_ms == 0 || (status.last_log_timrstamp + config.log_slice_interval_ms) < now)
         {
             SMP_HTTP::Trace(
-                "recv slice: {} {}, ({}|{}):{}",
+                "HttpContext recv slice: {} {}, ({}|{}):{}",
                 request.method,
                 request.url.to_url(),
                 response.content_length,
@@ -909,6 +909,13 @@ struct HttpConnection : public std::enable_shared_from_this<HttpConnection>
             return finish_in_failure(ec, "connect");
         }
 
+        SMP_HTTP::Trace(
+            "{} connected: {}:{}",
+            this->to_string(),
+            http_ctx->request.url.host,
+            http_ctx->request.url.port
+        );
+
         if (is_https_request)
         {
             timer.expires_after(
@@ -987,6 +994,13 @@ struct HttpConnection : public std::enable_shared_from_this<HttpConnection>
                 req_body.prepare_payload();
             }
         }
+
+        SMP_HTTP::Trace(
+            "{} request: {}, {}",
+            this->to_string(),
+            http_ctx->request.method,
+            http_ctx->request.url_string()
+        );
 
         if (is_https_request)
         {
@@ -1328,14 +1342,14 @@ struct IOContextWorker
     }
     void thread_func()
     {
-        spdlog::debug("IOContextWorker start");
+        SMP_HTTP::Debug("IOContextWorker start");
         thread_state = st::start;
 
         io_ctx.restart();
         io_ctx.run();
 
         thread_state = st::stop;
-        spdlog::debug("IOContextWorker stop");
+        SMP_HTTP::Debug("IOContextWorker stop");
     }
     void stop()
     {
@@ -1356,7 +1370,7 @@ struct IOContextWorker
 #define CHECK_WORK_THREAD \
 if (!in_work_thread()) \
 { \
-    spdlog::critical("recycle_http_client NOT in work thread!"); \
+    SMP_HTTP::Critical("recycle_http_client NOT in work thread!"); \
 }
 
 struct HttpManager : public std::enable_shared_from_this<HttpManager>
@@ -1459,9 +1473,10 @@ struct HttpManager : public std::enable_shared_from_this<HttpManager>
         );
 
         auto origin_on_complete = req->callback.on_complete;
-        req->callback.on_complete = [this,client, origin_on_complete](HttpContext* ctx, const error_code& sys_error_code, int http_status_code, const std::string& body)
+        req->callback.on_complete = [this, client, origin_on_complete](HttpContext* ctx, const error_code& sys_error_code, int http_status_code, const std::string& body)
             {
-                spdlog::debug("simple::http finished:{}, error:{}, http:{}, content: {}", 
+                SMP_HTTP::Debug("HttpManager => ({}) Finished:{}, error:{}, http:{}, content:{}",
+                    client->to_string(),
                     ctx->request.url_string(),
                     sys_error_code.to_string(),
                     http_status_code, 
@@ -1491,7 +1506,7 @@ struct HttpManager : public std::enable_shared_from_this<HttpManager>
             client = it->second;
             http_client_pool.erase(it);
         }
-        spdlog::debug("get_http_client, {}, from pool:{}, pool size:{}", client->to_string(), from_pool, http_client_pool.size());
+        SMP_HTTP::Debug("get_http_client, {}, from pool:{}, pool size:{}", client->to_string(), from_pool, http_client_pool.size());
         return client;
     }
 
@@ -1502,7 +1517,7 @@ struct HttpManager : public std::enable_shared_from_this<HttpManager>
         if (client->is_reusable)
         {
             http_client_pool.insert({ client->http_ctx->request.url.endpoint(), client });
-            spdlog::debug("recycle_http_client, {}, pool size:{}", client->to_string(), http_client_pool.size());
+            SMP_HTTP::Debug("recycle_http_client, {}, pool size:{}", client->to_string(), http_client_pool.size());
         }
     }
 

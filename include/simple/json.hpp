@@ -43,9 +43,16 @@ namespace simple {
 			static_assert(
 				(
 					std::is_same_v<T, bool> ||
+					std::is_same_v<T, int8_t> ||
+					std::is_same_v<T, uint8_t> ||
+					std::is_same_v<T, int16_t> ||
+					std::is_same_v<T, uint16_t> ||
+					std::is_same_v<T, int32_t> ||
+					std::is_same_v<T, uint32_t> ||
 					std::is_same_v<T, int64_t> ||
 					std::is_same_v<T, uint64_t> ||
 					std::is_same_v<T, float> ||
+					std::is_same_v<T, double> ||
 					std::is_same_v<T, std::string> ||
 					std::is_same_v<T, nlohmann::json> ||
 					std::is_same_v<T, simple::json>
@@ -77,17 +84,24 @@ namespace simple {
 				if (!v.is_boolean())
 					return false;
 			}
-			else if constexpr (std::is_same_v<T, uint64_t>)
+			else if constexpr ( std::is_same_v<T, uint8_t>
+				|| std::is_same_v<T, uint16_t>
+				|| std::is_same_v<T, uint32_t> 
+				||std::is_same_v<T, uint64_t>)
 			{
 				if (!v.is_number_unsigned())
 					return false;
 			}
-			else if constexpr (std::is_same_v<T, int64_t>)
+			else if constexpr (std::is_same_v<T, int8_t>
+				|| std::is_same_v<T, int16_t>
+				|| std::is_same_v<T, int32_t>
+				|| std::is_same_v<T, int64_t>)
 			{
 				if (!v.is_number_integer())
 					return false;
 			}
-			else if constexpr (std::is_same_v<T, float>)
+			else if constexpr (std::is_same_v<T, float>
+				|| std::is_same_v<T, double>)
 			{
 				if (!v.is_number_float())
 					return false;
@@ -100,6 +114,19 @@ namespace simple {
 
 			out = v;
 			
+			return true;
+		}
+		template<typename T>
+		bool get_kv(std::string_view key, T& out, const T& default_v) const
+		{
+			if (!get_kv(key, out))
+				out = default_v;
+			return true;
+		}
+		bool get_kv(std::string_view key, std::string& out, std::string_view default_v) const
+		{
+			if (!get_kv(key, out))
+				out = default_v;
 			return true;
 		}
 		static json& from_nlohmann_json(nlohmann::json& j)
