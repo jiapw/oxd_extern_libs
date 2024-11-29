@@ -1484,7 +1484,8 @@ struct HttpManager : public std::enable_shared_from_this<HttpManager>
                 );
                 this->recycle_http_client(client);
                 ctx->callback.on_complete = origin_on_complete;
-                ctx->callback.on_complete(ctx, sys_error_code, http_status_code, body);
+                if (ctx->callback.on_complete)
+                    ctx->callback.on_complete(ctx, sys_error_code, http_status_code, body);
             };
         client->execute(req);
     }
