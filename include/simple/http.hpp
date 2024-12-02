@@ -309,7 +309,7 @@ protected:
             auto& result = it->second;
             result.failed_count++;
             result.last_failed_tms = now;
-            result.unfreeze_tms = now + 1000 * (int)pow(2, (result.failed_count > 4 ? 4 : result.failed_count));
+            result.unfreeze_tms = now + 1000 * (int)pow(2, (result.failed_count > 8 ? 8 : result.failed_count));
         }
     }
     bool is_freezed(const std::string& url)
@@ -797,8 +797,11 @@ struct HttpConnection : public std::enable_shared_from_this<HttpConnection>
         if (http_ctx->is_completed())
             return finish_in_failure(INVALID_REQUEST, "http_client::execute");
 
-        if (HttpResultCache::IsFreezed(ctx->request.url_string()))
-            return finish_in_failure(BLOCKED_BY_FAILURE_CACHE, "http_client::execute");
+        if (ctx->request.method == "GET") // only block get
+        {
+            if (HttpResultCache::IsFreezed(ctx->request.url_string()))
+                return finish_in_failure(BLOCKED_BY_FAILURE_CACHE, "http_client::execute");
+        }
 
         SMP_HTTP::Trace(
             "{} execute: {} {}",
