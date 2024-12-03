@@ -7,6 +7,10 @@
 #include <spdlog/sinks/basic_file_sink.h>
 #include <spdlog/sinks/stdout_color_sinks.h>
 
+#ifdef __ANDROID__
+#include <spdlog/sinks/android_sink.h>
+#endif // __ANDROID__
+
 #include <cstdint>
 #include <array>
 
@@ -140,8 +144,16 @@ struct Logger
                 color_sink->set_color(spdlog::level::trace, FOREGROUND_INTENSITY);
 #else
                 color_sink->set_color(spdlog::level::trace, "\033[2m");
-#endif // DEBUG
+#endif // _WIN32
                 logger = std::make_shared<spdlog::logger>(GetLoggerName(), color_sink);
+
+#ifdef __ANDROID__
+                auto my_android_sink = std::make_shared<spdlog::sinks::android_sink_mt>();
+                logger->sinks().push_back(my_android_sink);
+#endif // __ANDROID__
+
+
+
                 logger->set_level(spdlog::level::trace);
             }
         } _si;
