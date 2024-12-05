@@ -309,7 +309,7 @@ protected:
             auto& result = it->second;
             result.failed_count++;
             result.last_failed_tms = now;
-            result.unfreeze_tms = now + 1000 * (int)pow(2, (result.failed_count > 8 ? 8 : result.failed_count));
+            result.unfreeze_tms = now + calc_recommended_interval(result.failed_count);
         }
     }
     bool is_freezed(const std::string& url)
@@ -326,6 +326,30 @@ protected:
         if (it == results.end())
             return 0;
         return it->second.unfreeze_tms;
+    }
+    int64_t calc_recommended_interval(int64_t fc)
+    {
+        int64_t t = 0;
+        if (fc == 0)
+            t = 0;
+        else if (fc < 3)
+            t = 2*1000;
+        else if (fc < 4)
+            t = 4 * 1000;
+        else if (fc < 5)
+            t = 16 * 1000;
+        else if (fc < 6)
+            t = 32 * 1000;
+        else
+            t = 64 * 1000;
+        return t;
+    }
+    int64_t get_recommended_interval(const std::string& url)
+    {
+        auto& it = results.find(url);
+        if (it == results.end())
+            return 0;
+        return calc_recommended_interval(it->second.failed_count);
     }
 public:
     static HttpResultCache& Singletone()
@@ -347,6 +371,16 @@ public:
     {
         static HttpResultCache& cache = Singletone();
         return cache.get_unfreeze_time(url);
+    }
+    static int64_t GetRecommendedInterval(const std::string& url)
+    {
+        static HttpResultCache& cache = Singletone();
+        return cache.get_unfreeze_time(url);
+    }
+    static int64_t CalcRecommendedInterval(int64_t failed_count)
+    {
+        static HttpResultCache& cache = Singletone();
+        return cache.calc_recommended_interval(failed_count);
     }
 };
 
