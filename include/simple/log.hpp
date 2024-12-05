@@ -82,6 +82,60 @@ constexpr uint64_t short_string_to_uint64_in_compile_time(const char(&str)[N])
     return char_as_byte(str, N - 1); // N-1 to exclude null terminator
 }
 
+#ifdef SIMPLE_LOG_NULL
+namespace simple
+{
+
+using namespace spdlog;
+
+template<uint64_t id>
+struct Logger
+{
+    static inline void FileSink(const std::string& file_path = "")
+    {}
+
+    static constexpr level::level_enum Level(level::level_enum lvl)
+    {
+        return level::level_enum::off;
+    }
+
+    static constexpr level::level_enum Level()
+    {
+        return level::level_enum::off;
+    }
+
+    template<typename... Args>
+    static inline void Log(level::level_enum lvl, format_string_t<Args...> fmt, Args &&... args)
+    {}
+
+    template<typename... Args>
+    static inline void Trace(format_string_t<Args...> fmt, Args &&... args)
+    {}
+
+    template<typename... Args>
+    static inline void Debug(format_string_t<Args...> fmt, Args &&... args)
+    {}
+
+    template<typename... Args>
+    static inline void Info(format_string_t<Args...> fmt, Args &&... args)
+    {}
+
+    template<typename... Args>
+    static inline void Warn(format_string_t<Args...> fmt, Args &&... args)
+    {}
+
+    template<typename... Args>
+    static inline void Error(format_string_t<Args...> fmt, Args &&... args)
+    {}
+
+    template<typename... Args>
+    static inline void Critical(format_string_t<Args...> fmt, Args &&... args)
+    {}
+};
+
+} // namespace simple
+
+#else
 namespace simple
 {
 
@@ -240,6 +294,8 @@ struct Logger
 };
 
 } // namespace simple
+
+#endif // SIMPLE_LOG_NULL
 
 #define LOG_DEFINE(logger) using logger = simple::Logger<short_string_to_uint64_in_compile_time(#logger)>
 
