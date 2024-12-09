@@ -346,7 +346,7 @@ protected:
     }
     int64_t get_recommended_interval(const std::string& url)
     {
-        auto& it = results.find(url);
+        auto it = results.find(url);
         if (it == results.end())
             return 0;
         return calc_recommended_interval(it->second.failed_count);
