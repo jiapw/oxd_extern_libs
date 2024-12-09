@@ -1355,7 +1355,7 @@ struct HttpConnection : public std::enable_shared_from_this<HttpConnection>
     }
 };
 
-struct IOContextWorker 
+struct IOContextWorker : public std::enable_shared_from_this<IOContextWorker>
 {
     asio::io_context& io_ctx;
     boost::asio::executor_work_guard<boost::asio::io_context::executor_type> work_guard;
@@ -1367,15 +1367,15 @@ struct IOContextWorker
         stop
     };
     st thread_state = st::init;
-    bool is_running()
-    {
-        return thread_state == st::start;
-    }
     IOContextWorker(asio::io_context& io_c)
         : io_ctx(io_c)
         , work_guard(boost::asio::make_work_guard(io_c))
         , thread(&IOContextWorker::thread_func, this)
     {
+    }
+    bool is_running()
+    {
+        return thread_state == st::start;
     }
     void thread_func()
     {
@@ -1393,13 +1393,30 @@ struct IOContextWorker
         if (!is_running())
             return;
 
-        work_guard.reset();
-        io_ctx.stop();
-        thread.join();
+        if (std::this_thread::get_id() == thread.get_id())
+        {
+            std::thread new_thread(
+                [self=shared_from_this()]() {
+                    self->work_guard.reset();
+                    self->io_ctx.stop();
+                    self->thread.join();
+                });
+            new_thread.detach();
+        }
+        else
+        {
+            work_guard.reset();
+            io_ctx.stop();
+            thread.join();
+        }
     }
     ~IOContextWorker()
     {
         stop();
+    }
+    static std::shared_ptr<IOContextWorker> Create(asio::io_context& io_c)
+    {
+        return std::make_shared<IOContextWorker>(io_c);
     }
 };
 
@@ -1418,7 +1435,7 @@ struct HttpManager : public std::enable_shared_from_this<HttpManager>
         ssl_ctx.set_options(
             ssl::context::default_workarounds |
             ssl::context::no_sslv2 |
-            ssl::context::no_sslv3 |
+            CHECK_WORK_THREADssl::context::no_sslv3 |
             ssl::context::no_tlsv1 |
             ssl::context::no_tlsv1_1
         );
@@ -1432,6 +1449,11 @@ struct HttpManager : public std::enable_shared_from_this<HttpManager>
 
     void stop_work_thread()
     {
+        if (!worker)
+        {
+            SMP_HTTP::Critical("stop_work_thread, but the worker is empty!");
+            return;
+        }
         worker->stop();
         worker = nullptr;
     }
@@ -1441,6 +1463,11 @@ struct HttpManager : public std::enable_shared_from_this<HttpManager>
         assert(worker);
         assert(worker->is_running());
         return (std::this_thread::get_id() == worker->thread.get_id());
+    }
+
+    bool is_working()
+    {
+        return worker!=nullptr;
     }
 
     template<typename WorkHandler>
@@ -1502,6 +1529,12 @@ struct HttpManager : public std::enable_shared_from_this<HttpManager>
 
     void execute(std::shared_ptr<HttpContext> req)
     {
+        if (!is_working())
+        {
+            SMP_HTTP::Critical("HttpManager::execute without working thread!");
+            return;
+        }
+
         auto client = thread_safe(
             [&]()->std::shared_ptr<HttpConnection>
             {

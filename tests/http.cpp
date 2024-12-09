@@ -42,8 +42,8 @@ void test_http_tools()
 void test_http_manager()
 {
 	
-	simple::HttpManager http_mngr;
-	http_mngr.start_work_thread();
+	auto http_mngr = std::make_shared<simple::HttpManager>();
+	http_mngr->start_work_thread();
 
 	std::vector<std::string> urls = {
 		"http://bing.com",
@@ -53,6 +53,11 @@ void test_http_manager()
 		"https://video1.2ndu.com/16MB/4x4_2.bin",
 		//"https://code.visualstudio.com/sha/download?build=stable&os=win32-x64-user",
 	};
+
+	http_mngr->create_thread_timer(1000 * 1,
+		[self= http_mngr](const boost::system::error_code& ec) {
+			self->stop_work_thread();
+		});
 
 	for (auto i =0 ;i<urls.size();i++)
 	{
@@ -106,9 +111,9 @@ void test_http_manager()
 				}
 
 			);
-			http_mngr.execute(http_req);
+			http_mngr->execute(http_req);
 
-			while (!http_req->is_completed())
+			while (!http_req->is_completed()&& http_mngr->is_working())
 			{
 				std::this_thread::sleep_for(std::chrono::milliseconds(100));
 			}
@@ -118,7 +123,7 @@ void test_http_manager()
 		printf("elapsed: %lld \n", tm.elapsed());
 	}
 
-	http_mngr.stop_work_thread();
+	http_mngr->stop_work_thread();
 
 }
 
