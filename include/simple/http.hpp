@@ -74,6 +74,7 @@ enum class HttpErrorCode {
 
     INVALID_URL         = 0x1001,
     INVALID_REQUEST,
+    INVALID_STATUS,
 
     TIMEOUT_RESOLVE     = 0x2001,
     TIMEOUT_CONNECT,
@@ -147,6 +148,7 @@ public:
 const error_code SUCCESS                        = error_code();
 const error_code INVALID_URL                    = HttpErrorCategory::make_error_code(HttpErrorCode::INVALID_URL);
 const error_code INVALID_REQUEST                = HttpErrorCategory::make_error_code(HttpErrorCode::INVALID_REQUEST);
+const error_code INVALID_STATUS                 = HttpErrorCategory::make_error_code(HttpErrorCode::INVALID_STATUS);
 const error_code TIMEOUT_RESOLVE                = HttpErrorCategory::make_error_code(HttpErrorCode::TIMEOUT_RESOLVE);
 const error_code TIMEOUT_CONNECT                = HttpErrorCategory::make_error_code(HttpErrorCode::TIMEOUT_CONNECT);
 const error_code TIMEOUT_SSL_HANDSHAKE          = HttpErrorCategory::make_error_code(HttpErrorCode::TIMEOUT_SSL_HANDSHAKE);
@@ -782,6 +784,7 @@ struct HttpConnection : public std::enable_shared_from_this<HttpConnection>
     
     bool is_https_request = false;
     bool is_reusable = false;
+    simple::ms::timestamp finished_tm;
 
     asio::io_context& ioc_ctx;
     ssl::context& ssl_ctx;
@@ -813,12 +816,14 @@ struct HttpConnection : public std::enable_shared_from_this<HttpConnection>
 
     void finish_in_failure(const beast::error_code& ec, const std::string& info)
     {
+        finished_tm.reset_now();
         is_reusable = false;
         return http_ctx->finish_in_failure(ec, info);
     }
 
     void finish_in_success()
     {
+        finished_tm.reset_now();
         is_reusable = true;
         return http_ctx->finish_in_success();
     }
@@ -1084,7 +1089,15 @@ struct HttpConnection : public std::enable_shared_from_this<HttpConnection>
         boost::ignore_unused(bytes_transferred);
 
         if (ec)
-            return finish_in_failure(ec, "write");
+        {
+            SMP_HTTP::Warn(
+                "{} failed in write request: {}, caused by: {}",
+                this->to_string(),
+                http_ctx->request.url_string(),
+                ec.message()
+            );
+            return finish_in_failure(ec, "write request");
+        }
 
         if (is_https_request)
         {
@@ -1233,6 +1246,9 @@ struct HttpConnection : public std::enable_shared_from_this<HttpConnection>
     void handle_response_finish()
     {
         auto& status = http_ctx->status;
+
+        if (status.http_status_code == 0)
+            return finish_in_failure(INVALID_STATUS, "handle_response_finish without http_status_code");
 
         // 2xx
         if (is_http_status_2xx(status.http_status_code))
@@ -1576,6 +1592,12 @@ struct HttpManager : public std::enable_shared_from_this<HttpManager>
             from_pool = true;
             client = it->second;
             http_client_pool.erase(it);
+
+            if (client->finished_tm.elapsed() > 1000 * 60 )
+            {
+                SMP_HTTP::Debug("find a expired http connection in the pool, drop it & create new one");
+                client = std::make_shared<HttpConnection>(io_ctx, ssl_ctx);
+            }
         }
         SMP_HTTP::Debug("get_http_client, {}, from pool:{}, pool size:{}", client->to_string(), from_pool, http_client_pool.size());
         return client;
