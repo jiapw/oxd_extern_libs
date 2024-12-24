@@ -29,6 +29,10 @@ struct time
         {
             reset_now();
         }
+        timestamp(int64_t t)
+        {
+            _val = chrono::time_point<chrono::system_clock>(T(t));
+        }
         void reset_now()
         {
             _val = chrono::system_clock::now();

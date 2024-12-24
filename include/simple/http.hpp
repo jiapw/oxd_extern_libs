@@ -1634,7 +1634,7 @@ struct Http
         static bool Operate(std::shared_ptr<HttpContext> request, std::string& out, int64_t timeout_ms)
         {
             asio::io_context io_ctx;
-            ssl::context ssl_ctx{ ssl::context::tlsv13_client };
+            ssl::context ssl_ctx{ ssl::context::tls_client };
             SteadyTimer timer{ io_ctx };
 
             request->callback.on_complete = [&timer](const HttpContext* ctx, const error_code& sys_error_code, int http_status_code, const std::string& body) {
