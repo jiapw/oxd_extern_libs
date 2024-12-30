@@ -89,12 +89,13 @@ enum class HttpErrorCode {
     FAILED_SSL_HANDSHAKE,
     FAILED_READ,
     FAILED_WRITE,
+    FAILED_BY_UPPER_LAYER,
 
     FAILED_REDIRECT_COUNT,
     FAILED_REDIRECT_LOCATION,
 
-    BLOCKED_BY_CONFIG   = 0X3001,
-    BLOCKED_BY_FAILURE_CACHE,
+    BLOCKED_BY_CONFIG   = 0X4001,
+    BLOCKED_BY_FAILURE_CACHE
 };
 
 using error_code = boost::system::error_code;
@@ -129,6 +130,8 @@ public:
             return "read response body";
         case HttpErrorCode::TIMEOUT_READ_RESPONSE_SLICE:
             return "read response slice";
+        case HttpErrorCode::FAILED_BY_UPPER_LAYER:
+            return "failed by upper layer";
         case HttpErrorCode::BLOCKED_BY_CONFIG:
             return "block request by config";
         case HttpErrorCode::BLOCKED_BY_FAILURE_CACHE:
@@ -158,6 +161,7 @@ const error_code TIMEOUT_READ_RESPONSE_BODY     = HttpErrorCategory::make_error_
 const error_code TIMEOUT_READ_RESPONSE_SLICE    = HttpErrorCategory::make_error_code(HttpErrorCode::TIMEOUT_READ_RESPONSE_SLICE);
 const error_code FAILED_REDIRECT_COUNT          = HttpErrorCategory::make_error_code(HttpErrorCode::FAILED_REDIRECT_COUNT);
 const error_code FAILED_REDIRECT_LOCATION       = HttpErrorCategory::make_error_code(HttpErrorCode::FAILED_REDIRECT_LOCATION);
+const error_code FAILED_BY_UPPER_LAYER          = HttpErrorCategory::make_error_code(HttpErrorCode::FAILED_BY_UPPER_LAYER);
 const error_code BLOCKED_BY_CONFIG              = HttpErrorCategory::make_error_code(HttpErrorCode::BLOCKED_BY_CONFIG);
 const error_code BLOCKED_BY_FAILURE_CACHE       = HttpErrorCategory::make_error_code(HttpErrorCode::BLOCKED_BY_FAILURE_CACHE);
 
@@ -391,8 +395,8 @@ struct HttpManager;
 
 struct HttpCallback
 {
-    using OnRecvHeader  = std::function<void(HttpContext* ctx, int http_status_code)>;
-    using OnRecvSlice   = std::function<void(HttpContext* ctx, uint64_t offset, std::string_view& slice)>;
+    using OnRecvHeader  = std::function<bool(HttpContext* ctx, int http_status_code)>; // if you want to end the request, return false
+    using OnRecvSlice   = std::function<bool(HttpContext* ctx, uint64_t offset, std::string_view& slice)>; // if you want to end the request, return false
     using OnComplete    = std::function<void(HttpContext* ctx, const error_code& sys_error_code, int http_status_code, const std::string& body)>;
     using OnDataNeeded  = std::function<bool(std::string& buf)>;
     using OnTimer       = std::function<void(const boost::system::error_code& ec)>;
@@ -439,15 +443,19 @@ struct HttpContext : public std::enable_shared_from_this<HttpContext>
 
         HttpContext* ctx = nullptr;
 
-        void recv_header(int http_status_code)
+        bool recv_header(int http_status_code)
         {
             if (on_recv_header)
-                on_recv_header(ctx, http_status_code);
+                return on_recv_header(ctx, http_status_code);
+            else
+                return true;
         }
-        void recv_slice(uint64_t offset, std::string_view& slice)
+        bool recv_slice(uint64_t offset, std::string_view& slice)
         {
             if (on_recv_slice)
-                on_recv_slice(ctx, offset, slice);
+                return on_recv_slice(ctx, offset, slice);
+            else
+                return false;
         }
         void http_complete(const error_code& sys_error_code, int http_status_code, const std::string& body)
         {
@@ -679,7 +687,7 @@ struct HttpContext : public std::enable_shared_from_this<HttpContext>
         return "";
     }
 
-    void on_recv_slice()
+    bool on_recv_slice()
     {
         if (auto now = simple::ms::now(); config.log_slice_interval_ms == 0 || (status.last_log_timrstamp + config.log_slice_interval_ms) < now)
         {
@@ -697,7 +705,7 @@ struct HttpContext : public std::enable_shared_from_this<HttpContext>
         auto slice = response.slice_view();
         auto offset = response.slice_recv_bytes;
         response.slice_recv_bytes += slice.size();
-        callback.recv_slice(request.range_from + offset, slice);
+        return callback.recv_slice(request.range_from + offset, slice);
     }
 
     void on_http_complete()
@@ -718,7 +726,7 @@ struct HttpContext : public std::enable_shared_from_this<HttpContext>
             response.content_length = opt.value();
     }
 
-    void on_recv_header()
+    bool on_recv_header()
     {
         if (is_slice_mode())
             process_http_header(response.buffer_body);
@@ -727,7 +735,7 @@ struct HttpContext : public std::enable_shared_from_this<HttpContext>
 
         HttpResultCache::ReportResult(request.url_string(), status.http_status_code);
 
-        callback.recv_header(status.http_status_code);
+        return callback.recv_header(status.http_status_code);
     }
 
     void finish_in_failure(const beast::error_code& ec, const std::string& info)
@@ -1171,7 +1179,10 @@ struct HttpConnection : public std::enable_shared_from_this<HttpConnection>
             return finish_in_failure(ec, "read response header");
         }
 
-        http_ctx->on_recv_header();
+        if (!http_ctx->on_recv_header())
+        {
+            return finish_in_failure(FAILED_BY_UPPER_LAYER, "read response header");
+        }
 
         if (http_ctx->is_slice_mode())
             async_read_response_body_slice();
@@ -1362,7 +1373,10 @@ struct HttpConnection : public std::enable_shared_from_this<HttpConnection>
             return finish_in_failure(ec, "read response slice");
         }
 
-        http_ctx->on_recv_slice();
+        if (!http_ctx->on_recv_slice())
+        {
+            return finish_in_failure(FAILED_BY_UPPER_LAYER, "read response slice");
+        }
 
         if (http_ctx->response.buffer_body->is_done())
             handle_response_finish();

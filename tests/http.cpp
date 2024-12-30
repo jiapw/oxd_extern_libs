@@ -47,17 +47,19 @@ void test_http_manager()
 
 	std::vector<std::string> urls = {
 		"http://bing.com",
-		"https://video1.2ndu.com/16MB/4x4_0.bin",
-		"https://video1.2ndu.com/16MB/4x4_1.bin",
-		"https://video1.2ndu.com/16MB/4x4_4.bin",
-		"https://video1.2ndu.com/16MB/4x4_2.bin",
+		"https://video1.2ndu.com/1c596349-d532-41be-b318-b4b2b02c148d/1/-qCuqohLXT2Yp3nXaY6LaTqhINHbIhfFM9YRbinAbpQ%3D.data",
+		"https://video1.2ndu.com/1c596349-d532-41be-b318-b4b2b02c148d/1/0YcdSTkZRNY2vqksLgrmMm2jzPN6TgXzyzkQ5n1PbjM%3D.data",
+		"https://video1.2ndu.com/1c596349-d532-41be-b318-b4b2b02c148d/1/M7VirI7Ui8H6FrOn8rZdJ6Fx8D65yC8Gm8BU9VuRSzE%3D.data",
+		"https://video1.2ndu.com/1c596349-d532-41be-b318-b4b2b02c148d/1/dHRC9JQAonj5B19y1x66_5ux48TgKxFHO_HLckZzZaA%3D.data",
 		//"https://code.visualstudio.com/sha/download?build=stable&os=win32-x64-user",
 	};
 
+	/*
 	http_mngr->create_thread_timer(1000 * 1,
 		[self= http_mngr](const boost::system::error_code& ec) {
 			self->stop_work_thread();
 		});
+	*/
 
 	for (auto i =0 ;i<urls.size();i++)
 	{
@@ -67,7 +69,7 @@ void test_http_manager()
 		
 		{
 			auto  http_req = simple::HttpContext::create(urls[i],
-				[](const simple::HttpContext* ctx, int status_code)->void
+				[i](const simple::HttpContext* ctx, int status_code)->bool
 				{
 					HttpTest::Info(
 						"recv header: {} status code:{} content length:{}",
@@ -75,12 +77,21 @@ void test_http_manager()
 						status_code, 
 						ctx->response.content_length
 					);
+
+					if (i < 4)
+						return true;
+					else
+						return false;
 				},
 
 #if defined(BLOCK_READ)
-				[](const simple::HttpContext* ctx, uint64_t offset, std::string_view& slice)->void
+				[i](const simple::HttpContext* ctx, uint64_t offset, std::string_view& slice)->bool
 				{
 					// todo
+					if (i < 2)
+						return true;
+					else
+						return false;
 				},
 #else
 				nullptr,
