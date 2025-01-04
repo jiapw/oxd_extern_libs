@@ -9,6 +9,10 @@
 #include <future>
 #include <unordered_map>
 
+#define BOOST_ASIO_ENABLE_CANCELIO
+#define BOOST_ASIO_NO_DEPRECATED
+#define BOOST_EXCEPTION_DISABLE
+
 #include <boost/algorithm/string.hpp>
 
 #include <boost/asio.hpp>
@@ -768,8 +772,7 @@ struct SteadyTimer : public boost::asio::steady_timer
     }
     void cancel()
     {
-        boost::system::error_code ec;
-        boost::asio::steady_timer::cancel(ec);
+        boost::asio::steady_timer::cancel();
     }
 };
 
@@ -819,7 +822,7 @@ struct HttpConnection : public std::enable_shared_from_this<HttpConnection>
 
     inline beast::tcp_stream& get_tcp_stream()
     {
-        return is_https_request ? beast::get_lowest_layer(*ssl_stream_ptr) : (*tcp_stream_ptr);
+        return is_https_request ? ssl_stream_ptr->next_layer() : (*tcp_stream_ptr);
     }
 
     void finish_in_failure(const beast::error_code& ec, const std::string& info)
@@ -1503,7 +1506,7 @@ struct HttpManager : public std::enable_shared_from_this<HttpManager>
     template<typename WorkHandler>
     auto thread_safe(WorkHandler handler)
     {
-        auto f = io_ctx.dispatch(boost::asio::use_future(handler));
+        auto f = asio::dispatch(io_ctx, boost::asio::use_future(handler));
         f.wait();
         return f.get();
     }
