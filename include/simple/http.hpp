@@ -475,7 +475,7 @@ struct HttpContext : public std::enable_shared_from_this<HttpContext>
         uint16_t    resolve_timeout = 5 * 1000;     // timeouts are in milliseconds
         uint16_t    connect_timeout = 5 * 1000;
         uint16_t    handshake_timeout = 5 * 1000;
-        uint16_t    write_timeout = 5 * 1000;
+        uint32_t    write_timeout = 5 * 1000;
         uint16_t    read_response_header_timeout = 5 * 1000;
         uint16_t    read_response_body_timeout = 10 * 1000;
         uint16_t    read_response_chunk_timeout = 2 * 1000;
@@ -1046,6 +1046,10 @@ struct HttpConnection : public std::enable_shared_from_this<HttpConnection>
                 req_body.body() = body.str();
                 req_body.prepare_payload();
             }
+
+            int32_t write_timeout = (req_body.body().size() / (128 * 1024 / 8)) * 1000;
+            if (write_timeout > http_ctx->config.write_timeout)
+                http_ctx->config.write_timeout = write_timeout;
         }
 
         SMP_HTTP::Trace(
