@@ -1046,10 +1046,17 @@ struct HttpConnection : public std::enable_shared_from_this<HttpConnection>
                 req_body.body() = body.str();
                 req_body.prepare_payload();
             }
+            
+            uint32_t timeout_at_128kbps = (uint32_t)(req_body.body().size() / (128 * 1024 / 8)) * 1000;
+            if (timeout_at_128kbps > http_ctx->config.write_timeout)
+                http_ctx->config.write_timeout = timeout_at_128kbps;
 
-            int32_t write_timeout = (req_body.body().size() / (128 * 1024 / 8)) * 1000;
-            if (write_timeout > http_ctx->config.write_timeout)
-                http_ctx->config.write_timeout = write_timeout;
+            SMP_HTTP::Trace(
+                "{} post: {} bytes, timeout: {} ms",
+                this->to_string(),
+                req_body.body().size(),
+                timeout_at_128kbps
+            );
         }
 
         SMP_HTTP::Trace(
