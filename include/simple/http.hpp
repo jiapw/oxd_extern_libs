@@ -339,20 +339,12 @@ protected:
     }
     int64_t calc_recommended_interval(int64_t fc)
     {
-        int64_t t = 0;
-        if (fc == 0)
-            t = 0;
-        else if (fc < 3)
-            t = 2*1000;
-        else if (fc < 4)
-            t = 4 * 1000;
-        else if (fc < 5)
-            t = 16 * 1000;
-        else if (fc < 6)
-            t = 32 * 1000;
+        static int64_t pending_table[] = { 0, 8*1000, 16*1000, 32 * 1000 };
+
+        if (fc < std::size(pending_table))
+            return pending_table[fc];
         else
-            t = 64 * 1000;
-        return t;
+            return 64 * 1000 * fc;
     }
     int64_t get_recommended_interval(const std::string& url)
     {

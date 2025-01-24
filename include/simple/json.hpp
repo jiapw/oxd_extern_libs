@@ -108,7 +108,7 @@ namespace simple {
 			}
 			else if constexpr (std::is_same_v<T, nlohmann::json> || std::is_same_v<T, json>)
 			{
-				if (!v.is_object())
+				if (!v.is_object() && !v.is_array())
 					return false;
 			}
 
