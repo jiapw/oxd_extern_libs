@@ -64,7 +64,7 @@ namespace simple {
 
 			if (contains(key))
 				v = this->operator[](key);
-			else 
+			else if(key.size() && key[0]=='/')
 			{
 				auto jp = nlohmann::json::json_pointer(std::string(key));
 				if (contains(jp))
