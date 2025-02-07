@@ -7,6 +7,8 @@
 #include <spdlog/sinks/basic_file_sink.h>
 #include <spdlog/sinks/stdout_color_sinks.h>
 
+#include <spdlog/sinks/udp_sink.h>
+
 #ifdef __ANDROID__
 #include <spdlog/sinks/android_sink.h>
 #endif // __ANDROID__
@@ -27,6 +29,7 @@
 #include "fmt.hpp"
 #include "time.hpp"
 
+/*
 constexpr uint64_t generate_crc64_entry(uint64_t index) {
     uint64_t crc = index;
     for (int j = 0; j < 8; ++j) {
@@ -63,6 +66,7 @@ template<size_t N>
 constexpr uint64_t crc64_compile_time(const char(&str)[N]) {
     return crc64(str, N - 1); // N-1 to exclude null terminator
 }
+*/
 
 constexpr uint64_t char_as_byte(const char* data, size_t length) 
 {
@@ -136,6 +140,124 @@ struct Logger
 } // namespace simple
 
 #else
+
+namespace spdlog {
+
+namespace details {
+
+    namespace severity {
+        enum severity_enum : int {
+            emergency = 0,
+            alert = 1,
+            critical = 2,
+            error = 3,
+            warning = 4,
+            notice = 5,
+            informational = 6,
+            debug = 7,
+        };
+    }
+
+} // namespace details
+
+class syslog_formatter : public formatter {
+public:
+    syslog_formatter(int facility, std::string_view hostname, std::string_view appname)
+        : facility_(facility)
+        , hostname_(hostname)
+        , appname_(appname)
+        , pattern_formatter_("%Y-%m-%dT%H:%M:%S.%eZ", pattern_time_type::utc, "")
+    {
+        pattern_formatter_.need_localtime();
+    }
+
+    syslog_formatter(const syslog_formatter& other) = delete;
+    syslog_formatter& operator=(const syslog_formatter& other) = delete;
+
+    std::unique_ptr<formatter> clone() const override
+    {
+        auto cloned = std::make_unique<syslog_formatter>(facility_, hostname_, appname_);
+        return cloned;
+    }
+
+    void format(const details::log_msg& msg, memory_buf_t& dest) override
+    {
+        details::severity::severity_enum severity;
+
+        switch (msg.level) {
+        case level::critical:
+            severity = details::severity::critical;
+            break;
+
+        case level::err:
+            severity = details::severity::error;
+            break;
+
+        case level::warn:
+            severity = details::severity::warning;
+            break;
+
+        case level::info:
+            severity = details::severity::informational;
+            break;
+
+        default:
+            severity = details::severity::debug;
+            break;
+        }
+
+        dest.push_back('<');
+        details::fmt_helper::append_int((facility_ * 8) + severity, dest);
+        dest.push_back('>');
+
+        dest.push_back('1');
+
+        dest.push_back(' ');
+        pattern_formatter_.format(msg, dest);
+
+        dest.push_back(' ');
+        if (hostname_.empty()) {
+            dest.push_back('-');
+        }
+        else {
+            details::fmt_helper::append_string_view(hostname_, dest);
+        }
+
+        dest.push_back(' ');
+        if (appname_.empty()) {
+            dest.push_back('-');
+        }
+        else {
+            details::fmt_helper::append_string_view(appname_, dest);
+        }
+
+        dest.push_back(' ');
+        details::fmt_helper::append_int(details::os::pid(), dest);
+
+        dest.push_back(' ');
+        if (msg.logger_name.size() == 0) {
+            dest.push_back('-');
+        }
+        else {
+            details::fmt_helper::append_string_view(msg.logger_name, dest);
+        }
+
+        dest.push_back(' ');
+        dest.push_back('-'); // nil structured data
+
+        dest.push_back(' ');
+        details::fmt_helper::append_string_view(msg.payload, dest);
+    }
+
+private:
+    int facility_;
+    std::string hostname_;
+    std::string appname_;
+    spdlog::pattern_formatter pattern_formatter_;
+};
+
+} // namespace spdlog
+
 namespace simple
 {
 
@@ -194,21 +316,35 @@ struct Logger
             SI()
             {
                 auto color_sink = std::make_shared<spdlog::sinks::stdout_color_sink_mt>();
-#ifdef _WIN32
-                color_sink->set_color(spdlog::level::trace, FOREGROUND_INTENSITY);
-#else
-                color_sink->set_color(spdlog::level::trace, "\033[2m");
-#endif // _WIN32
+
+                // supported console types: windows & unix-base
+                {
+                    #ifdef _WIN32
+                        color_sink->set_color(spdlog::level::trace, FOREGROUND_INTENSITY);
+                    #else
+                        color_sink->set_color(spdlog::level::trace, "\033[2m");
+                    #endif // _WIN32
+                }
+
                 logger = std::make_shared<spdlog::logger>(GetLoggerName(), color_sink);
 
-#ifdef __ANDROID__
-                auto my_android_sink = std::make_shared<spdlog::sinks::android_sink_mt>();
-                logger->sinks().push_back(my_android_sink);
-#endif // __ANDROID__
+                // android requires a special sink
+                {
+                    #ifdef __ANDROID__
+                        auto my_android_sink = std::make_shared<spdlog::sinks::android_sink_mt>();
+                        logger->sinks().push_back(my_android_sink);
+                    #endif // __ANDROID__
+                }
 
+                // default level
+                {
+                    #if defined(DEBUG) || defined(_DEBUG)
+                        logger->set_level(spdlog::level::trace);
+                    #else
+                        logger->set_level(spdlog::level::off);
+                    #endif // DEBUG
+                }
 
-
-                logger->set_level(spdlog::level::trace);
             }
         } _si;
         return _si.logger;
@@ -247,6 +383,19 @@ struct Logger
             file_path.empty() ? "add auto-named file sink : {}" : "add specific file sink : {}",
             sink->filename()
         );
+    }
+
+    static void UdpSink(const std::string_view host, const uint16_t port)
+    {
+        spdlog::sinks::udp_sink_config cfg = { std::string(host), port };
+        auto sink = std::make_shared<spdlog::sinks::udp_sink_mt>(cfg);
+
+        spdlog::syslog_formatter syslog_formatter(1, "localhost", "example"); // 1 means "user" in syslog
+        sink->set_formatter(syslog_formatter.clone());
+
+        auto obj = SingleInstance();
+        obj->sinks().push_back(sink);
+        Info( "add UDP sink, sendto: {}:{}", host, port);
     }
 
     template<typename... Args>
@@ -308,6 +457,8 @@ inline void test_logger()
     FOO::FileSink();
     FOO::FileSink();
     FOO::FileSink("foo.log");
+
+    FOO::UdpSink("192.168.218.39", 514);
 
     FOO::Log(spdlog::level::info, "start with level({})", (int)FOO::Level());
     FOO::Log(spdlog::level::info, "set level({})", (int)FOO::Level(spdlog::level::trace));
