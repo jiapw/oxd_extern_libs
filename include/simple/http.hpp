@@ -1514,6 +1514,12 @@ struct HttpManager : public std::enable_shared_from_this<HttpManager>
         return f.get();
     }
 
+    template<typename WorkHandler>
+    auto thread_safe_async(WorkHandler handler)
+    {
+        asio::post(io_ctx, std::forward<WorkHandler>(handler));
+    }
+
     void _thread_timer_func(const boost::system::error_code& ec, int64_t timeout_ms, HttpCallback::OnTimer f, std::shared_ptr<SteadyTimer> timer)
     {
         CHECK_WORK_THREAD;
