@@ -487,7 +487,7 @@ struct HttpContext : public std::enable_shared_from_this<HttpContext>
         int                 http_status_code = 0;
         int                 response_version = 10;
         int                 redirect_count = 0;
-        int64_t             last_log_timrstamp = 0;
+        int64_t             last_log_timestamp = 0;
     } status;
 
     bool is_completed()
@@ -501,7 +501,7 @@ struct HttpContext : public std::enable_shared_from_this<HttpContext>
         std::string     method;
         int             range_from = 0;
         
-        http::request<http::string_body> body;
+        http::request<http::string_body> http_request;
 
         std::vector<MultipartBodyItem> post;
 
@@ -509,7 +509,7 @@ struct HttpContext : public std::enable_shared_from_this<HttpContext>
         {
             range_from = from;
             std::string range_str = fmt::format("bytes={}-", from);
-            body.set(http::field::range, range_str);
+            http_request.set(http::field::range, range_str);
         }
 
         std::string url_string() const
@@ -624,14 +624,14 @@ struct HttpContext : public std::enable_shared_from_this<HttpContext>
             request.method = method;
         }
 
-        request.body = http::request<http::string_body>();
+        request.http_request = http::request<http::string_body>();
         {
-            auto& req_body = request.body;
-            req_body.method_string(request.method);
-            req_body.version(config.version);
-            req_body.target(request.url.path_to_resource());
-            req_body.set(http::field::host, request.url.host);
-            req_body.set(http::field::connection, "keep-alive");
+            auto& req = request.http_request;
+            req.method_string(request.method);
+            req.version(config.version);
+            req.target(request.url.path_to_resource());
+            req.set(http::field::host, request.url.host);
+            req.set(http::field::connection, "keep-alive");
         }
 
         return true;
@@ -685,7 +685,7 @@ struct HttpContext : public std::enable_shared_from_this<HttpContext>
 
     bool on_recv_slice()
     {
-        if (auto now = simple::ms::now(); config.log_slice_interval_ms == 0 || (status.last_log_timrstamp + config.log_slice_interval_ms) < now)
+        if (auto now = simple::ms::now(); config.log_slice_interval_ms == 0 || (status.last_log_timestamp + config.log_slice_interval_ms) < now)
         {
             SMP_HTTP::Trace(
                 "HttpContext recv slice: {} {}, ({}|{}):{}",
@@ -695,7 +695,7 @@ struct HttpContext : public std::enable_shared_from_this<HttpContext>
                 response.slice_recv_bytes,
                 response.slice_view().size()
             );
-            status.last_log_timrstamp = now;
+            status.last_log_timestamp = now;
         }
 
         auto slice = response.slice_view();
@@ -1032,21 +1032,21 @@ struct HttpConnection : public std::enable_shared_from_this<HttpConnection>
 
             body << "--" << boundary << "--\r\n";
 
-            auto& req_body = http_ctx->request.body;
+            auto& req = http_ctx->request.http_request;
             {
-                req_body.set(http::field::content_type, "multipart/form-data; boundary=" + boundary);
-                req_body.body() = body.str();
-                req_body.prepare_payload();
+                req.set(http::field::content_type, "multipart/form-data; boundary=" + boundary);
+                req.body() = body.str();
+                req.prepare_payload();
             }
             
-            uint32_t timeout_at_128kbps = (uint32_t)(req_body.body().size() / (128 * 1024 / 8)) * 1000;
+            uint32_t timeout_at_128kbps = (uint32_t)(req.body().size() / (128 * 1024 / 8)) * 1000;
             if (timeout_at_128kbps > http_ctx->config.write_timeout)
                 http_ctx->config.write_timeout = timeout_at_128kbps;
 
             SMP_HTTP::Trace(
                 "{} post: {} bytes, timeout: {} ms",
                 this->to_string(),
-                req_body.body().size(),
+                req.body().size(),
                 timeout_at_128kbps
             );
         }
@@ -1071,7 +1071,7 @@ struct HttpConnection : public std::enable_shared_from_this<HttpConnection>
 
             http::async_write(
                 *ssl_stream_ptr,
-                http_ctx->request.body,
+                http_ctx->request.http_request,
                 beast::bind_front_handler(&HttpConnection::on_write_request, shared_from_this())
             );
 
@@ -1089,7 +1089,7 @@ struct HttpConnection : public std::enable_shared_from_this<HttpConnection>
 
             http::async_write(
                 *tcp_stream_ptr,
-                http_ctx->request.body,
+                http_ctx->request.http_request,
                 beast::bind_front_handler(&HttpConnection::on_write_request, shared_from_this())
             );
 
