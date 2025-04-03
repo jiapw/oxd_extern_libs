@@ -24,6 +24,74 @@
 #include "time.hpp"
 
 
+namespace simple {
+
+// define a class fully compatible with boost::beast::http::string_body, prepare for specialization of boost::beast::http::serializer 
+struct string_body : public boost::beast::http::string_body{};
+
+}
+
+namespace boost::beast::http {
+
+template<
+    bool isRequest,
+    class Fields>
+class serializer<isRequest, simple::string_body, Fields> : public serializer<isRequest, string_body, Fields>
+{
+public:
+    using Base = serializer<isRequest, string_body, Fields>;
+
+    size_t header_size;
+    size_t payload_size;
+    size_t total;
+    size_t finished;
+
+    explicit serializer(message<isRequest, simple::string_body, Fields>& msg)
+        : Base(reinterpret_cast<message<isRequest, string_body, Fields>&>(msg))
+    {
+        calc_size(msg);
+
+        finished = 0;
+        total = header_size + payload_size;
+    }
+
+    void calc_size(message<isRequest, simple::string_body, Fields>& msg)
+    {
+        payload_size = msg.payload_size().value_or(0);
+
+        header_size = 0;
+        {
+            // 1. "GET /index.html HTTP/1.1\r\n"
+            header_size += msg.method_string().size() + 1;  // GET + space
+            header_size += msg.target().size() + 1;         // path + space
+            header_size += 8 + 2; // "HTTP/1.1" + "\r\n"
+
+            // 2. all fields
+            for (const auto& field : msg) {
+                header_size += field.name_string().size() + 2;  // "Header: "
+                header_size += field.value().size() + 2;        // "Value\r\n"
+            }
+
+            // 3. empty line "\r\n"
+            header_size += 2;
+        }
+    }
+
+    void consume(std::size_t n)
+    {
+        Base::consume(n);
+        finished += n;
+    }
+
+    size_t progress()
+    {
+        return finished*1000/total;
+    }
+};
+
+}
+
+
 
 //Due to the use of asynchronous operations, it is necessary to ensure that the object must exist at the time of the callback. 
 //Please use smart pointer of the object. 
@@ -494,14 +562,15 @@ struct HttpContext : public std::enable_shared_from_this<HttpContext>
     {
         return status.completed;
     }
-    
+
     struct
     {
         Url             url;
         std::string     method;
         int             range_from = 0;
         
-        http::request<http::string_body> http_request;
+        http::request<simple::string_body> http_request;
+        std::optional<boost::beast::http::serializer<true, simple::string_body>> http_request_serializer; // 
 
         std::vector<MultipartBodyItem> post;
 
@@ -516,6 +585,20 @@ struct HttpContext : public std::enable_shared_from_this<HttpContext>
         {
             return url.to_url();
         }
+
+        size_t progress()
+        {
+            if (!http_request_serializer.has_value())
+                return 0;
+            return http_request_serializer->progress();
+        }
+        size_t total()
+        {
+            if (!http_request_serializer.has_value())
+                return 0;
+            return http_request_serializer->total;
+        }
+
     } request;
 
     struct
@@ -624,7 +707,7 @@ struct HttpContext : public std::enable_shared_from_this<HttpContext>
             request.method = method;
         }
 
-        request.http_request = http::request<http::string_body>();
+        request.http_request = http::request<simple::string_body>();
         {
             auto& req = request.http_request;
             req.method_string(request.method);
@@ -633,6 +716,7 @@ struct HttpContext : public std::enable_shared_from_this<HttpContext>
             req.set(http::field::host, request.url.host);
             req.set(http::field::connection, "keep-alive");
         }
+        request.http_request_serializer.reset();
 
         return true;
     }
@@ -1058,6 +1142,8 @@ struct HttpConnection : public std::enable_shared_from_this<HttpConnection>
             http_ctx->request.url_string()
         );
 
+        http_ctx->request.http_request_serializer.emplace(http_ctx->request.http_request);
+
         if (is_https_request)
         {
             timer.expires_after(
@@ -1071,7 +1157,7 @@ struct HttpConnection : public std::enable_shared_from_this<HttpConnection>
 
             http::async_write(
                 *ssl_stream_ptr,
-                http_ctx->request.http_request,
+                *http_ctx->request.http_request_serializer,
                 beast::bind_front_handler(&HttpConnection::on_write_request, shared_from_this())
             );
 
@@ -1089,7 +1175,7 @@ struct HttpConnection : public std::enable_shared_from_this<HttpConnection>
 
             http::async_write(
                 *tcp_stream_ptr,
-                http_ctx->request.http_request,
+                *http_ctx->request.http_request_serializer,
                 beast::bind_front_handler(&HttpConnection::on_write_request, shared_from_this())
             );
 
@@ -1112,6 +1198,13 @@ struct HttpConnection : public std::enable_shared_from_this<HttpConnection>
             );
             return finish_in_failure(ec, "write request");
         }
+
+        SMP_HTTP::Trace(
+            "{} send request: {} bytes, finished: {}%",
+            this->to_string(),
+            http_ctx->request.total(),
+            http_ctx->request.progress() /10
+        );
 
         if (is_https_request)
         {
