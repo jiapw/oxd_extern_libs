@@ -46,8 +46,8 @@ public:
     size_t total;
     size_t finished;
 
-    explicit serializer(message<isRequest, simple::string_body, Fields>& msg)
-        : Base(reinterpret_cast<message<isRequest, string_body, Fields>&>(msg))
+    explicit serializer(message<isRequest, string_body, Fields>& msg)
+        : Base(msg)
     {
         calc_size(msg);
 
@@ -55,7 +55,7 @@ public:
         total = header_size + payload_size;
     }
 
-    void calc_size(message<isRequest, simple::string_body, Fields>& msg)
+    void calc_size(message<isRequest, http::string_body, Fields>& msg)
     {
         payload_size = msg.payload_size().value_or(0);
 
@@ -569,8 +569,8 @@ struct HttpContext : public std::enable_shared_from_this<HttpContext>
         std::string     method;
         int             range_from = 0;
         
-        http::request<simple::string_body> http_request;
-        std::optional<boost::beast::http::serializer<true, simple::string_body>> http_request_serializer; // 
+        http::request<http::string_body> http_request;
+        std::shared_ptr<boost::beast::http::serializer<true, simple::string_body>> http_request_serializer;
 
         std::vector<MultipartBodyItem> post;
 
@@ -588,13 +588,13 @@ struct HttpContext : public std::enable_shared_from_this<HttpContext>
 
         size_t progress()
         {
-            if (!http_request_serializer.has_value())
+            if (!http_request_serializer)
                 return 0;
             return http_request_serializer->progress();
         }
         size_t total()
         {
-            if (!http_request_serializer.has_value())
+            if (!http_request_serializer)
                 return 0;
             return http_request_serializer->total;
         }
@@ -707,7 +707,7 @@ struct HttpContext : public std::enable_shared_from_this<HttpContext>
             request.method = method;
         }
 
-        request.http_request = http::request<simple::string_body>();
+        request.http_request = http::request<http::string_body>();
         {
             auto& req = request.http_request;
             req.method_string(request.method);
@@ -716,7 +716,6 @@ struct HttpContext : public std::enable_shared_from_this<HttpContext>
             req.set(http::field::host, request.url.host);
             req.set(http::field::connection, "keep-alive");
         }
-        request.http_request_serializer.reset();
 
         return true;
     }
@@ -1131,7 +1130,7 @@ struct HttpConnection : public std::enable_shared_from_this<HttpConnection>
                 "{} post: {} bytes, timeout: {} ms",
                 this->to_string(),
                 req.body().size(),
-                timeout_at_128kbps
+                http_ctx->config.write_timeout
             );
         }
 
@@ -1142,7 +1141,7 @@ struct HttpConnection : public std::enable_shared_from_this<HttpConnection>
             http_ctx->request.url_string()
         );
 
-        http_ctx->request.http_request_serializer.emplace(http_ctx->request.http_request);
+        http_ctx->request.http_request_serializer = std::make_shared<boost::beast::http::serializer<true, simple::string_body>>(http_ctx->request.http_request);
 
         if (is_https_request)
         {
