@@ -920,12 +920,12 @@ struct HttpConnection : public std::enable_shared_from_this<HttpConnection>
         http_ctx = ctx;
 
         if (http_ctx->is_completed())
-            return finish_in_failure(INVALID_REQUEST, "http_client::execute");
+            return finish_in_failure(INVALID_REQUEST, "HttpConnection::execute");
 
         if (ctx->request.method == "GET") // only block get
         {
             if (HttpResultCache::IsFreezed(ctx->request.url_string()))
-                return finish_in_failure(BLOCKED_BY_FAILURE_CACHE, "http_client::execute");
+                return finish_in_failure(BLOCKED_BY_FAILURE_CACHE, "HttpConnection::execute");
         }
 
         SMP_HTTP::Trace(
@@ -1552,7 +1552,7 @@ struct IOContextWorker : public std::enable_shared_from_this<IOContextWorker>
 #define CHECK_WORK_THREAD \
 if (!in_work_thread()) \
 { \
-    SMP_HTTP::Critical("recycle_http_client NOT in work thread!"); \
+    SMP_HTTP::Critical("current is NOT managed working thread!"); \
 }
 
 struct HttpManager : public std::enable_shared_from_this<HttpManager>
@@ -1646,62 +1646,64 @@ struct HttpManager : public std::enable_shared_from_this<HttpManager>
     }
 
     
-    std::shared_ptr<HttpContext> create_http_and_execute(
+    std::pair<std::shared_ptr<HttpConnection>, std::shared_ptr<HttpContext>>
+    create_http_and_execute(
         const std::string& url,
         const HttpCallback::OnRecvHeader& recv_header_handler = nullptr,
         const HttpCallback::OnRecvSlice& recv_slice_handler = nullptr, 
         const HttpCallback::OnComplete& http_finish_handler = nullptr
     )
     {
-        auto req = HttpContext::create(url, recv_header_handler, recv_slice_handler, http_finish_handler);
-        if (req->is_completed())
-            return nullptr;
+        auto http_ctx = HttpContext::create(url, recv_header_handler, recv_slice_handler, http_finish_handler);
+        if (http_ctx->is_completed())
+            return std::pair{nullptr, nullptr};
 
-        this->execute(req);
-        return req->shared_from_this();
+        auto http_conn = this->execute(http_ctx);
+        return std::pair{ http_conn->shared_from_this(), http_ctx->shared_from_this() };
     }
 
-    void execute(std::shared_ptr<HttpContext> req)
+    std::shared_ptr<HttpConnection> execute(std::shared_ptr<HttpContext> http_ctx)
     {
         if (!is_working())
         {
             SMP_HTTP::Critical("HttpManager::execute without working thread!");
-            return;
+            return nullptr;
         }
 
-        auto client = thread_safe(
+        auto http_conn = thread_safe(
             [&]()->std::shared_ptr<HttpConnection>
             {
-                return get_http_client(req->request.url.endpoint());
+                return get_http_connection(http_ctx->request.url.endpoint());
             }
         );
 
-        auto origin_on_complete = req->callback.on_complete;
-        req->callback.on_complete = [this, client, origin_on_complete](HttpContext* ctx, const error_code& sys_error_code, int http_status_code, const std::string& body)
+        auto origin_on_complete = http_ctx->callback.on_complete;
+        http_ctx->callback.on_complete = [this, http_conn, origin_on_complete](HttpContext* ctx, const error_code& sys_error_code, int http_status_code, const std::string& body)
             {
                 SMP_HTTP::Debug("HttpManager => ({}) Finished:{}, error:{}, http:{}, content:{}",
-                    client->to_string(),
+                    http_conn->to_string(),
                     ctx->request.url_string(),
                     sys_error_code.to_string(),
                     http_status_code, 
                     ctx->response.content_length
                 );
-                this->recycle_http_client(client);
+                this->recycle_http_connection(http_conn);
                 ctx->callback.on_complete = origin_on_complete;
                 if (ctx->callback.on_complete)
                     ctx->callback.on_complete(ctx, sys_error_code, http_status_code, body);
             };
-        client->execute(req);
+        http_conn->execute(http_ctx);
+        return http_conn;
     }
 
-    std::shared_ptr<HttpConnection> get_http_client(const std::string connection)
+    std::shared_ptr<HttpConnection> get_http_connection(const std::string connection)
     {
         CHECK_WORK_THREAD;
 
         std::shared_ptr<HttpConnection> client;
-        auto it = http_client_pool.find(connection);
+        auto it = http_connection_pool.find(connection);
         bool from_pool = false;
-        if (it == http_client_pool.end())
+        if (it == http_connection_pool.end())
         {
             client = std::make_shared<HttpConnection>(io_ctx, ssl_ctx);
         }
@@ -1709,7 +1711,7 @@ struct HttpManager : public std::enable_shared_from_this<HttpManager>
         {
             from_pool = true;
             client = it->second;
-            http_client_pool.erase(it);
+            http_connection_pool.erase(it);
 
             if (client->finished_tm.elapsed() > 1000 * 60 )
             {
@@ -1717,18 +1719,18 @@ struct HttpManager : public std::enable_shared_from_this<HttpManager>
                 client = std::make_shared<HttpConnection>(io_ctx, ssl_ctx);
             }
         }
-        SMP_HTTP::Debug("get_http_client, {}, from pool:{}, pool size:{}", client->to_string(), from_pool, http_client_pool.size());
+        SMP_HTTP::Debug("get_http_client, {}, from pool:{}, pool size:{}", client->to_string(), from_pool, http_connection_pool.size());
         return client;
     }
 
-    void recycle_http_client(std::shared_ptr<HttpConnection> client)
+    void recycle_http_connection(std::shared_ptr<HttpConnection> http_conn)
     {
         CHECK_WORK_THREAD;
 
-        if (client->is_reusable)
+        if (http_conn->is_reusable)
         {
-            http_client_pool.insert({ client->http_ctx->request.url.endpoint(), client });
-            SMP_HTTP::Debug("recycle_http_client, {}, pool size:{}", client->to_string(), http_client_pool.size());
+            http_connection_pool.insert({ http_conn->http_ctx->request.url.endpoint(), http_conn });
+            SMP_HTTP::Debug("recycle_http_client, {}, pool size:{}", http_conn->to_string(), http_connection_pool.size());
         }
     }
 
@@ -1742,7 +1744,7 @@ protected:
     asio::io_context io_ctx;
     ssl::context ssl_ctx{ ssl::context::tls_client };
     std::shared_ptr<IOContextWorker> worker;
-    std::unordered_multimap<std::string, std::shared_ptr<HttpConnection>> http_client_pool;
+    std::unordered_multimap<std::string, std::shared_ptr<HttpConnection>> http_connection_pool;
 };
 
 struct Http
