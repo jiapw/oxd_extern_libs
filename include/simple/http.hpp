@@ -24,12 +24,107 @@
 #include "time.hpp"
 
 
-namespace simple {
+namespace simple
+{
+
+#define HTTP_ERROR_LIST(XX) \
+    XX(INVALID_URL,                     0x1001, "Invalid URL") \
+    XX(INVALID_REQUEST,                 0x1002, "Invalid request") \
+    XX(INVALID_STATUS,                  0x1003, "Invalid status") \
+    XX(TIMEOUT_RESOLVE,                 0x2001, "Timeout during DNS resolution") \
+    XX(TIMEOUT_CONNECT,                 0x2002, "Timeout during TCP connect") \
+    XX(TIMEOUT_SSL_HANDSHAKE,           0x2003, "Timeout during SSL handshake") \
+    XX(TIMEOUT_WRITE_REQUEST,           0x2004, "Timeout writing request") \
+    XX(TIMEOUT_READ_RESPONSE_HEADER,    0x2005, "Timeout reading response header") \
+    XX(TIMEOUT_READ_RESPONSE_BODY,      0x2006, "Timeout reading response body") \
+    XX(TIMEOUT_READ_RESPONSE_SLICE,     0x2007, "Timeout reading response slice") \
+    XX(FAILED_RESOLVE,                  0x3001, "Failed to resolve host") \
+    XX(FAILED_CONNECT,                  0x3002, "Failed to connect") \
+    XX(FAILED_SSL_HANDSHAKE,            0x3003, "Failed SSL handshake") \
+    XX(FAILED_READ,                     0x3004, "Failed to read from socket") \
+    XX(FAILED_WRITE,                    0x3005, "Failed to write to socket") \
+    XX(FAILED_BY_UPPER_LAYER,           0x3006, "Request canceled by upper layer") \
+    XX(FAILED_REDIRECT_COUNT,           0x3007, "Too many redirects") \
+    XX(FAILED_REDIRECT_LOCATION,        0x3008, "Invalid redirect location") \
+    XX(BLOCKED_BY_CONFIG,               0x4001, "Blocked by configuration") \
+    XX(BLOCKED_BY_FAILURE_CACHE,        0x4002, "Blocked due to failure cache")
+
+enum class HttpError
+{
+#define NAME_VALUE(name, value, str) name = value,
+    HTTP_ERROR_LIST(NAME_VALUE)
+#undef NAME_VALUE
+};
+
+inline const char* HttpErrorString(HttpError code)
+{
+    switch (code) {
+#define CASE_NAME_RETURN_STRING(name, value, str) case HttpError::name: return str;
+        HTTP_ERROR_LIST(CASE_NAME_RETURN_STRING)
+#undef CASE_NAME_RETURN_STRING
+    default: return "Unknown HTTP error";
+    }
+}
+
+class HttpErrorCategory : public boost::system::error_category
+{
+public:
+    const char* name() const noexcept override 
+    {
+        return "simple::HttpErrorCategory";
+    }
+
+    std::string message(int ev) const override 
+    {
+        return HttpErrorString(static_cast<HttpError>(ev));
+    }
+
+    inline static const boost::system::error_category& http_error_category() 
+    {
+        static HttpErrorCategory instance;
+        return instance;
+    }
+
+    inline static boost::system::error_code make_error_code(HttpError e)
+    {
+        return { static_cast<int>(e), http_error_category() };
+    }
+};
+
+inline boost::system::error_code make_error_code(HttpError e) 
+{
+    return HttpErrorCategory::make_error_code(e);
+}
+
+} // namespace simple
+
+namespace boost::system
+{
+    template <>
+    struct is_error_code_enum<simple::HttpError> : std::true_type {};
+}
+
+namespace simple
+{
+    using error_code = boost::system::error_code;
+
+    // define SUCCESS to represent no error
+    const error_code SUCCESS = error_code();
+
+    // declare all HttpError
+#define DECALRE_CONST(name, value, str) const error_code name = HttpError::name;
+    HTTP_ERROR_LIST(DECALRE_CONST)
+#undef DECALRE_CONST
+
+} // namespace simple
+
+namespace simple
+{
 
 // define a class fully compatible with boost::beast::http::string_body, prepare for specialization of boost::beast::http::serializer 
-struct string_body : public boost::beast::http::string_body{};
+struct string_body : public boost::beast::http::string_body {};
 
-}
+} // namespace simple
 
 namespace boost::beast::http {
 
@@ -141,101 +236,6 @@ inline bool fail(char const* message, char const* what)
     SMP_HTTP::Warn("failed: {}, {}", what, message);
     return false;
 }
-
-enum class HttpErrorCode {
-
-    INVALID_URL         = 0x1001,
-    INVALID_REQUEST,
-    INVALID_STATUS,
-
-    TIMEOUT_RESOLVE     = 0x2001,
-    TIMEOUT_CONNECT,
-    TIMEOUT_SSL_HANDSHAKE,	// https only
-    TIMEOUT_WRITE_REQUEST,
-    TIMEOUT_READ_RESPONSE_HEADER,
-    TIMEOUT_READ_RESPONSE_BODY,
-    TIMEOUT_READ_RESPONSE_SLICE,
-
-    FAILED_RESOLVE      = 0x3001,
-    FAILED_CONNECT,
-    FAILED_SSL_HANDSHAKE,
-    FAILED_READ,
-    FAILED_WRITE,
-    FAILED_BY_UPPER_LAYER,
-
-    FAILED_REDIRECT_COUNT,
-    FAILED_REDIRECT_LOCATION,
-
-    BLOCKED_BY_CONFIG   = 0X4001,
-    BLOCKED_BY_FAILURE_CACHE
-};
-
-using error_code = boost::system::error_code;
-
-class HttpErrorCategory : public boost::system::error_category
-{
-public:
-    const char* name() const noexcept override
-    {
-        return "simple::HttpErrorCategory";
-    }
-
-    std::string message(int ev) const override
-    {
-        switch (static_cast<HttpErrorCode>(ev))
-        {
-        case HttpErrorCode::INVALID_URL:
-            return "url is invalid";
-        case HttpErrorCode::INVALID_REQUEST:
-            return "request is invalid";
-        case HttpErrorCode::TIMEOUT_RESOLVE:
-            return "resolve timeout";
-        case HttpErrorCode::TIMEOUT_CONNECT:
-            return "connect timeout";
-        case HttpErrorCode::TIMEOUT_SSL_HANDSHAKE:
-            return "ssl handshake timeout";
-        case HttpErrorCode::TIMEOUT_WRITE_REQUEST:
-            return "write request timeout";
-        case HttpErrorCode::TIMEOUT_READ_RESPONSE_HEADER:
-            return "read response header";
-        case HttpErrorCode::TIMEOUT_READ_RESPONSE_BODY:
-            return "read response body";
-        case HttpErrorCode::TIMEOUT_READ_RESPONSE_SLICE:
-            return "read response slice";
-        case HttpErrorCode::FAILED_BY_UPPER_LAYER:
-            return "failed by upper layer";
-        case HttpErrorCode::BLOCKED_BY_CONFIG:
-            return "block request by config";
-        case HttpErrorCode::BLOCKED_BY_FAILURE_CACHE:
-            return "block request by recent frequent errors at same url";
-        default:
-            return "unknown error ";
-        }
-    }
-
-    static const error_code make_error_code(HttpErrorCode e)
-    {
-        static HttpErrorCategory _;
-        return error_code(static_cast<int>(e), _);
-    }
-};
-
-const error_code SUCCESS                        = error_code();
-const error_code INVALID_URL                    = HttpErrorCategory::make_error_code(HttpErrorCode::INVALID_URL);
-const error_code INVALID_REQUEST                = HttpErrorCategory::make_error_code(HttpErrorCode::INVALID_REQUEST);
-const error_code INVALID_STATUS                 = HttpErrorCategory::make_error_code(HttpErrorCode::INVALID_STATUS);
-const error_code TIMEOUT_RESOLVE                = HttpErrorCategory::make_error_code(HttpErrorCode::TIMEOUT_RESOLVE);
-const error_code TIMEOUT_CONNECT                = HttpErrorCategory::make_error_code(HttpErrorCode::TIMEOUT_CONNECT);
-const error_code TIMEOUT_SSL_HANDSHAKE          = HttpErrorCategory::make_error_code(HttpErrorCode::TIMEOUT_SSL_HANDSHAKE);
-const error_code TIMEOUT_WRITE_REQUEST          = HttpErrorCategory::make_error_code(HttpErrorCode::TIMEOUT_WRITE_REQUEST);
-const error_code TIMEOUT_READ_RESPONSE_HEADER   = HttpErrorCategory::make_error_code(HttpErrorCode::TIMEOUT_READ_RESPONSE_HEADER);
-const error_code TIMEOUT_READ_RESPONSE_BODY     = HttpErrorCategory::make_error_code(HttpErrorCode::TIMEOUT_READ_RESPONSE_BODY);
-const error_code TIMEOUT_READ_RESPONSE_SLICE    = HttpErrorCategory::make_error_code(HttpErrorCode::TIMEOUT_READ_RESPONSE_SLICE);
-const error_code FAILED_REDIRECT_COUNT          = HttpErrorCategory::make_error_code(HttpErrorCode::FAILED_REDIRECT_COUNT);
-const error_code FAILED_REDIRECT_LOCATION       = HttpErrorCategory::make_error_code(HttpErrorCode::FAILED_REDIRECT_LOCATION);
-const error_code FAILED_BY_UPPER_LAYER          = HttpErrorCategory::make_error_code(HttpErrorCode::FAILED_BY_UPPER_LAYER);
-const error_code BLOCKED_BY_CONFIG              = HttpErrorCategory::make_error_code(HttpErrorCode::BLOCKED_BY_CONFIG);
-const error_code BLOCKED_BY_FAILURE_CACHE       = HttpErrorCategory::make_error_code(HttpErrorCode::BLOCKED_BY_FAILURE_CACHE);
 
 struct Url
 {
