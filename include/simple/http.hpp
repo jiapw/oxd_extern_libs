@@ -1086,7 +1086,7 @@ struct HttpConnection : public std::enable_shared_from_this<HttpConnection>
 
         if (http_ctx->request.method == "POST")
         {
-            std::string boundary = "----WebKitFormBoundary7MA4YWxkTrZu0gW";
+            std::string boundary = "----WebKitFormBoundary"+std::to_string(simple::nanoseconds::now());
             std::stringstream body;
 
             for (auto& it : http_ctx->request.post)
