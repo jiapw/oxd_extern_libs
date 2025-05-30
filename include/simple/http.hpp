@@ -843,7 +843,7 @@ struct SteadyTimer : public boost::asio::steady_timer
     void expires_after(int64_t timeout_ms, WaitToken&& token = asio::default_completion_token_t<executor_type>())
     {
         boost::asio::steady_timer::expires_after(std::chrono::milliseconds(timeout_ms));
-        async_wait(token);
+        async_wait(std::forward<WaitToken>(token));
     }
     void cancel()
     {
@@ -1599,15 +1599,15 @@ struct HttpManager : public std::enable_shared_from_this<HttpManager>
     }
 
     template<typename WorkHandler>
-    auto thread_safe(WorkHandler handler)
+    auto thread_safe(WorkHandler&& handler)
     {
-        auto f = asio::dispatch(io_ctx, boost::asio::use_future(handler));
+        auto f = asio::dispatch(io_ctx, boost::asio::use_future(std::forward<WorkHandler>(handler)));
         f.wait();
         return f.get();
     }
 
     template<typename WorkHandler>
-    auto thread_safe_async(WorkHandler handler)
+    auto thread_safe_async(WorkHandler&& handler)
     {
         asio::post(io_ctx, std::forward<WorkHandler>(handler));
     }
