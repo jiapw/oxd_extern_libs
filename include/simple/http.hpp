@@ -1494,7 +1494,7 @@ struct IOContextWorker : public std::enable_shared_from_this<IOContextWorker>
         start,
         stop
     };
-    st thread_state = st::init;
+    volatile st thread_state = st::init;
     IOContextWorker(asio::io_context& io_c)
         : io_ctx(io_c)
         , work_guard(boost::asio::make_work_guard(io_c))
@@ -1614,12 +1614,15 @@ struct HttpManager : public std::enable_shared_from_this<HttpManager>
 
     void _thread_timer_func(const boost::system::error_code& ec, int64_t timeout_ms, HttpCallback::OnTimer f, std::shared_ptr<SteadyTimer> timer)
     {
-        CHECK_WORK_THREAD;
+        // CHECK_WORK_THREAD;
 
         if (ec == asio::error::operation_aborted) // cancel
             return;
 
-        f(ec);
+        if (worker && worker->is_running()) // The first execution of a newly created timer may be scheduled to execute earlier than subsequent code in the parent thread.
+        {
+            f(ec);
+        }
 
         timer->expires_after(
             timeout_ms,
