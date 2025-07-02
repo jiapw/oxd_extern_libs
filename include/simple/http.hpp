@@ -47,7 +47,8 @@ namespace simple
     XX(FAILED_REDIRECT_COUNT,           0x3007, "Too many redirects") \
     XX(FAILED_REDIRECT_LOCATION,        0x3008, "Invalid redirect location") \
     XX(BLOCKED_BY_CONFIG,               0x4001, "Blocked by configuration") \
-    XX(BLOCKED_BY_FAILURE_CACHE,        0x4002, "Blocked due to failure cache")
+    XX(BLOCKED_BY_FAILURE_CACHE,        0x4002, "Blocked due to failure cache") \
+    XX(CANCELED_BY_USER,                0x5001, "Canceled by user")
 
 enum class HttpError
 {
@@ -870,6 +871,7 @@ struct HttpConnection : public std::enable_shared_from_this<HttpConnection>
     
     bool is_https_request = false;
     bool is_reusable = false;
+    bool canceled_by_user = false;
     simple::ms::timestamp finished_tm;
 
     asio::io_context& ioc_ctx;
@@ -885,6 +887,11 @@ struct HttpConnection : public std::enable_shared_from_this<HttpConnection>
     ~HttpConnection()
     {
         return;
+    }
+
+    void Cancel()
+    {
+        canceled_by_user = true;
     }
 
     std::string to_string(int level = 0)
@@ -996,6 +1003,9 @@ struct HttpConnection : public std::enable_shared_from_this<HttpConnection>
                 return finish_in_failure(ec, "resolve");
         }
 
+        if (canceled_by_user)
+            return finish_in_failure(CANCELED_BY_USER, "resolve");
+
         SMP_HTTP::Trace(
             "{} resolve {}, result: [{}]", 
             this->to_string(),
@@ -1036,6 +1046,9 @@ struct HttpConnection : public std::enable_shared_from_this<HttpConnection>
             );
             return finish_in_failure(ec, "connect");
         }
+
+        if (canceled_by_user)
+            return finish_in_failure(CANCELED_BY_USER, "connect");
 
         SMP_HTTP::Trace(
             "{} connected: {}:{}",
@@ -1083,6 +1096,9 @@ struct HttpConnection : public std::enable_shared_from_this<HttpConnection>
             HttpResultCache::ReportResult(http_ctx->request.url_string(), ec.value());
             return finish_in_failure(ec, "handshake");
         }
+
+        if (canceled_by_user)
+            return finish_in_failure(CANCELED_BY_USER, "handshake");
 
         if (http_ctx->request.method == "POST")
         {
@@ -1198,6 +1214,9 @@ struct HttpConnection : public std::enable_shared_from_this<HttpConnection>
             return finish_in_failure(ec, "write request");
         }
 
+        if (canceled_by_user)
+            return finish_in_failure(CANCELED_BY_USER, "write request");
+
         SMP_HTTP::Trace(
             "{} send request: {} bytes, finished: {}%",
             this->to_string(),
@@ -1277,6 +1296,9 @@ struct HttpConnection : public std::enable_shared_from_this<HttpConnection>
             return finish_in_failure(ec, "read response header");
         }
 
+        if (canceled_by_user)
+            return finish_in_failure(CANCELED_BY_USER, "read response header");
+
         if (!http_ctx->on_recv_header())
         {
             return finish_in_failure(FAILED_BY_UPPER_LAYER, "read response header");
@@ -1340,6 +1362,9 @@ struct HttpConnection : public std::enable_shared_from_this<HttpConnection>
 
         if (ec)
             return finish_in_failure(ec, "read response body");
+
+        if (canceled_by_user)
+            return finish_in_failure(CANCELED_BY_USER, "read response body");
 
         SMP_HTTP::Trace("{} completed request: {} {} => [{}] {} Bytes",
             this->to_string(),
@@ -1470,6 +1495,9 @@ struct HttpConnection : public std::enable_shared_from_this<HttpConnection>
             );
             return finish_in_failure(ec, "read response slice");
         }
+
+        if (canceled_by_user)
+            return finish_in_failure(CANCELED_BY_USER, "read response slice");
 
         if (!http_ctx->on_recv_slice())
         {
@@ -1754,37 +1782,53 @@ struct Http
 {
     struct Sync
     {
-        static bool Operate(std::shared_ptr<HttpContext> request, std::string& out, int64_t timeout_ms)
+        static std::shared_ptr<HttpManager> RTM()
         {
-            asio::io_context io_ctx;
-            ssl::context ssl_ctx{ ssl::context::tls_client };
-            SteadyTimer timer{ io_ctx };
+            static std::shared_ptr<HttpManager> __rtm = std::make_shared<HttpManager>();
+            
+            if (!__rtm->is_working())
+                __rtm->start_work_thread();
 
-            request->callback.on_complete = [&timer](const HttpContext* ctx, const error_code& sys_error_code, int http_status_code, const std::string& body) {
-                timer.cancel();
-                };
+            return __rtm;
+        }
 
-            auto client = std::make_shared<HttpConnection>(io_ctx, ssl_ctx);
-            client->execute(request);
-
-            timer.expires_after(timeout_ms, [&io_ctx](const boost::system::error_code& ec) {
-                io_ctx.stop();
-                });
-
-            io_ctx.run();
-
-            if (request->response.string_body->get().result_int() == 200 && request->response.string_body->is_done())
+        static bool Operate(std::shared_ptr<HttpContext> http_ctx, std::string& out, int64_t timeout_ms)
+        {
+            std::promise<bool> promise;
+            auto future = promise.get_future();
+            
+            HttpContext::Callback& cbs = http_ctx->callback;
             {
-                out = std::move(request->response.string_body->get().body());
-                return true;
+                cbs.on_complete = [&out, &promise](HttpContext* ctx, const error_code& sys_error_code, int http_status_code, const std::string& body)
+                    {
+                        if (!sys_error_code.failed() && http_status_code == 200)
+                        {
+                            out = body;
+                            promise.set_value(true);
+                        }
+                        else
+                        {
+                            promise.set_value(false);
+                        }
+                    };
             }
-            return false;
+
+            
+            auto runtime_manager = RTM();
+            auto conn = runtime_manager->execute(http_ctx);
+            if (std::future_status::timeout == future.wait_for(std::chrono::milliseconds(timeout_ms)))
+            {
+                SMP_HTTP::Warn("Sync::Operate::Timeout!");
+                conn->Cancel();
+            }
+
+            return future.get();
         }
 
         static bool Get(const std::string& url, std::string& out, int64_t timeout_ms)
         {
-            auto request = HttpContext::create(url);
-            return Operate(request, out, timeout_ms);
+            auto http_ctx = HttpContext::create(url);
+            return Operate(http_ctx, out, timeout_ms);
         }
 
         static bool Post(const std::string& url, const std::vector<MultipartBodyItem>& items, std::string& out, int64_t timeout_ms)
