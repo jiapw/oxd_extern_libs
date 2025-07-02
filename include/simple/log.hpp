@@ -346,6 +346,10 @@ struct Logger
                 }
 
             }
+            ~SI()
+            {
+                logger = nullptr;
+            }
         } _si;
         return _si.logger;
     }
@@ -401,43 +405,50 @@ struct Logger
     template<typename... Args>
     static void Log(level::level_enum lvl, format_string_t<Args...> fmt, Args &&... args)
     {
-        SingleInstance()->log(lvl, fmt, std::forward<Args>(args)...);
+        if (auto si = SingleInstance())
+            si->log(lvl, fmt, std::forward<Args>(args)...);
     }
 
     template<typename... Args>
     static void Trace(format_string_t<Args...> fmt, Args &&... args)
     {
-        SingleInstance()->log(level::trace, fmt, std::forward<Args>(args)...);
+        if (auto si = SingleInstance())
+            si->log(level::trace, fmt, std::forward<Args>(args)...);
     }
     
     template<typename... Args>
     static void Debug(format_string_t<Args...> fmt, Args &&... args)
     {
-        SingleInstance()->log(level::debug, fmt, std::forward<Args>(args)...);
+        if (auto si = SingleInstance())
+            si->log(level::debug, fmt, std::forward<Args>(args)...);
     }
 
     template<typename... Args>
     static void Info(format_string_t<Args...> fmt, Args &&... args)
     {
-        SingleInstance()->log(level::info, fmt, std::forward<Args>(args)...);
+        if (auto si = SingleInstance())
+            si->log(level::info, fmt, std::forward<Args>(args)...);
     }
 
     template<typename... Args>
     static void Warn(format_string_t<Args...> fmt, Args &&... args)
     {
-        SingleInstance()->log(level::warn, fmt, std::forward<Args>(args)...);
+        if (auto si = SingleInstance())
+            si->log(level::warn, fmt, std::forward<Args>(args)...);
     }
 
     template<typename... Args>
     static void Error(format_string_t<Args...> fmt, Args &&... args)
     {
-        SingleInstance()->log(level::err, fmt, std::forward<Args>(args)...);
+        if (auto si = SingleInstance())
+            si->log(level::err, fmt, std::forward<Args>(args)...);
     }
 
     template<typename... Args>
     static void Critical(format_string_t<Args...> fmt, Args &&... args)
     {
-        SingleInstance()->log(level::critical, fmt, std::forward<Args>(args)...);
+        if (auto si = SingleInstance())
+            si->log(level::critical, fmt, std::forward<Args>(args)...);
     }
 
 };
