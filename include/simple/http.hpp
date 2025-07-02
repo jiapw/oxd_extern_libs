@@ -456,6 +456,7 @@ public:
 };
 
 struct HttpContext;
+struct HttpConnection;
 struct HttpManager;
 
 struct HttpCallback
@@ -557,6 +558,9 @@ struct HttpContext : public std::enable_shared_from_this<HttpContext>
         int                 response_version = 10;
         int                 redirect_count = 0;
         int64_t             last_log_timestamp = 0;
+
+        std::shared_ptr<HttpConnection> http_connection = nullptr;
+
     } status;
 
     bool is_completed()
@@ -726,6 +730,8 @@ struct HttpContext : public std::enable_shared_from_this<HttpContext>
         return callback.on_recv_slice != nullptr;
     }
 
+    void Cancel();
+
     bool finished_in_success() const
     {
         return (!status.sys_error_code.failed() && is_http_status_2xx(status.http_status_code));
@@ -867,7 +873,7 @@ struct HttpConnection : public std::enable_shared_from_this<HttpConnection>
 
     beast::flat_buffer buffer;
 
-    std::shared_ptr<HttpContext> http_ctx; 
+    std::shared_ptr<HttpContext> http_ctx;
     
     bool is_https_request = false;
     bool is_reusable = false;
@@ -876,6 +882,8 @@ struct HttpConnection : public std::enable_shared_from_this<HttpConnection>
 
     asio::io_context& ioc_ctx;
     ssl::context& ssl_ctx;
+
+    static std::atomic<int> global_count;
     
     HttpConnection(asio::io_context& ioc_ctx, ssl::context& ssl_ctx)
         : ioc_ctx(ioc_ctx)
@@ -883,9 +891,13 @@ struct HttpConnection : public std::enable_shared_from_this<HttpConnection>
         , resolver(ioc_ctx)
         , timer(ioc_ctx)
     {
+        int c  = ++global_count;
+        SMP_HTTP::Debug("HttpConnection() : {}", c);
     }
     ~HttpConnection()
     {
+        int c = --global_count;
+        SMP_HTTP::Debug("~HttpConnection() : {}", c);
         return;
     }
 
@@ -911,20 +923,42 @@ struct HttpConnection : public std::enable_shared_from_this<HttpConnection>
     {
         finished_tm.reset_now();
         is_reusable = false;
-        return http_ctx->finish_in_failure(ec, info);
+        http_ctx->finish_in_failure(ec, info);
+        unbind();
     }
 
     void finish_in_success()
     {
         finished_tm.reset_now();
         is_reusable = true;
-        return http_ctx->finish_in_success();
+        http_ctx->finish_in_success();
+        unbind();
     }
-    
+
+    void bind(std::shared_ptr<HttpContext> ctx)
+    {
+        if (http_ctx == ctx)
+            return;
+
+        assert(!http_ctx);
+        http_ctx = ctx;
+        http_ctx->status.http_connection = shared_from_this();
+    }
+
+    void unbind()
+    {
+        assert(http_ctx);
+        if (http_ctx)
+        {
+            http_ctx->status.http_connection = nullptr;
+            http_ctx = nullptr;
+        }
+    }
+
 
     void execute(std::shared_ptr<HttpContext> ctx)
     {
-        http_ctx = ctx;
+        bind(ctx);
 
         if (http_ctx->is_completed())
             return finish_in_failure(INVALID_REQUEST, "HttpConnection::execute");
@@ -1511,6 +1545,8 @@ struct HttpConnection : public std::enable_shared_from_this<HttpConnection>
     }
 };
 
+inline std::atomic<int> HttpConnection::global_count{ 0 };
+
 struct IOContextWorker : public std::enable_shared_from_this<IOContextWorker>
 {
     asio::io_context& io_ctx;
@@ -1778,20 +1814,26 @@ protected:
     std::unordered_multimap<std::string, std::shared_ptr<HttpConnection>> http_connection_pool;
 };
 
+inline void HttpContext::Cancel()
+{
+    if (status.http_connection)
+        status.http_connection->Cancel();
+}
+
 struct Http
 {
+    static std::shared_ptr<HttpManager> RTM()
+    {
+        static std::shared_ptr<HttpManager> __rtm = std::make_shared<HttpManager>();
+
+        if (!__rtm->is_working())
+            __rtm->start_work_thread();
+
+        return __rtm;
+    }
+
     struct Sync
     {
-        static std::shared_ptr<HttpManager> RTM()
-        {
-            static std::shared_ptr<HttpManager> __rtm = std::make_shared<HttpManager>();
-            
-            if (!__rtm->is_working())
-                __rtm->start_work_thread();
-
-            return __rtm;
-        }
-
         static bool Operate(std::shared_ptr<HttpContext> http_ctx, std::string& out, int64_t timeout_ms)
         {
             std::promise<bool> promise;
@@ -1813,7 +1855,6 @@ struct Http
                     };
             }
 
-            
             auto runtime_manager = RTM();
             auto conn = runtime_manager->execute(http_ctx);
             if (std::future_status::timeout == future.wait_for(std::chrono::milliseconds(timeout_ms)))
@@ -1849,6 +1890,48 @@ struct Http
                 return std::nullopt;
         }
     };
+
+
+    struct Async
+    {
+        static std::shared_ptr<HttpConnection>  Operate(std::shared_ptr<HttpContext> http_ctx)
+        {
+            auto runtime_manager = RTM();
+            return runtime_manager->execute(http_ctx);
+        }
+
+        /*
+        static bool Get(const std::string& url, std::string& out, int64_t timeout_ms)
+        {
+            auto http_ctx = HttpContext::create(url);
+            return Operate(http_ctx, out, timeout_ms);
+        }
+
+        static bool Post(const std::string& url, const std::vector<MultipartBodyItem>& items, std::string& out, int64_t timeout_ms)
+        {
+            auto http_ctx = HttpContext::create("");
+            http_ctx->init("POST", &url);
+            http_ctx->request.post = items;
+
+            return Operate(http_ctx, out, timeout_ms);
+        }
+        */
+
+        static std::shared_ptr<HttpContext> Get(const std::string& url, HttpCallback::OnComplete func)
+        {
+            auto http_ctx = HttpContext::create(
+                url,
+                nullptr,
+                nullptr,
+                func
+                );
+
+            auto http_conn = Operate(http_ctx);
+
+            return http_ctx;
+        }
+    };
+
 };
 
 
