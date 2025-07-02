@@ -10,31 +10,34 @@ const std::string url = "https://video1.2ndu.com/16MB/4x4_0.bin";
 
 LOG_DEFINE(HttpTest);
 
-void test_http_tools()
+void test_http_sync()
 {
 	if(1)
 	{
-		auto r = simple::Http::Sync::Get("https://www.sina.com.cn", 10*1000);
-		assert(r);
-		printf("%s\n\n", r->c_str());
+		auto r = simple::Http::Sync::Get("https://www.sina.com.cn", 1*50);
+		if (r)
+			printf("%s\n\n", r->c_str());
 	}
 
+	if(1)
 	{
-		std::string r;
-		simple::Http::Sync::Post(
+		std::string s;
+		bool b = simple::Http::Sync::Post(
 			"https://echo.free.beeceptor.com", 
 			{ 
 				{"name_1","value_1"}, 
 				{"name_2","file.name","0123456789"},
 				{"name_3","callback",[](std::string& buf)->bool{
-					buf = "\0\1\2\3\4\5zbxdefghijklmnopqrstuvwxyz\5\4\3\2\1\0";
+					buf.resize(1024 * 20);
+					//buf = "\0\1\2\3\4\5zbxdefghijklmnopqrstuvwxyz\5\4\3\2\1\0";
 					return true;
 				}}
 			}, 
-			r,
-			10*1000
+			s,
+			1*100
 		);
-		printf("%s\n\n", r.c_str());
+		if (b)
+			printf("%s\n\n", s.c_str());
 	}
 }
 
@@ -169,12 +172,62 @@ void test_http_error_code()
 
 }
 
+
+void test_http_async()
+{
+	LOG_DEFINE(ASYNC);
+
+	std::vector<std::string> urls = {
+		"http://bing.com",
+		"https://video1.2ndu.com/1c596349-d532-41be-b318-b4b2b02c148d/1/-qCuqohLXT2Yp3nXaY6LaTqhINHbIhfFM9YRbinAbpQ%3D.data",
+		"https://video1.2ndu.com/1c596349-d532-41be-b318-b4b2b02c148d/1/0YcdSTkZRNY2vqksLgrmMm2jzPN6TgXzyzkQ5n1PbjM%3D.data",
+		"https://video1.2ndu.com/1c596349-d532-41be-b318-b4b2b02c148d/1/M7VirI7Ui8H6FrOn8rZdJ6Fx8D65yC8Gm8BU9VuRSzE%3D.data",
+		"https://video1.2ndu.com/1c596349-d532-41be-b318-b4b2b02c148d/1/dHRC9JQAonj5B19y1x66_5ux48TgKxFHO_HLckZzZaA%3D.data",
+		//"https://code.visualstudio.com/sha/download?build=stable&os=win32-x64-user",
+	};
+
+	std::vector<std::shared_ptr<simple::HttpContext>> ctxes;
+
+	for (auto i = 0; i < urls.size(); i++)
+	{
+		ASYNC::Info("start: {}", urls[i]);
+
+		auto ctx = simple::Http::Async::Get(
+			urls[i],
+			[](simple::HttpContext* ctx, const simple::error_code& sys_error_code, int http_status_code, const std::string& body)
+			{
+				ASYNC::Info("finish: {}, sys:{}, http:{}, length:{}", ctx->request.url_string(), sys_error_code.value(), http_status_code, body.size());
+			});
+
+		ctxes.emplace_back(ctx);
+	}
+
+	simple::ms::sleep(1 * 1000);
+
+	for (auto i = 0; i < ctxes.size(); i++)
+	{
+		auto ctx = ctxes[i];
+		if (!ctx->status.completed)
+		{
+			ASYNC::Warn("cancel: {}", ctx->request.url_string());
+			ctx->Cancel();
+		}
+			
+	}
+
+}
+
 int main()
 {
-	//simple::test_logger();
+	simple::test_logger();
+
 	//test_http_error_code();
-	//test_http_tools();
-	test_http_manager();
+
+	//test_http_sync();
+
+	test_http_async();
+
+	simple::ms::sleep(1 * 1000);
 
 	return 0;
 }
