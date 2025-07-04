@@ -206,7 +206,40 @@ void test_http_error_code()
 
 void test_http_async()
 {
-	LOG_DEFINE(ASYNC);
+	if (1)
+	{
+		auto s = std::make_shared<std::string>();
+		auto ctx = simple::Http::Async::Post(
+			"https://echo.free.beeceptor.com",
+			{
+				{"name_1","value_1"},
+				{"name_2","file.name","0123456789"},
+				{"name_3","callback",[](std::string& buf)->bool {
+					buf.resize(1024 * 20);
+					//buf = "\0\1\2\3\4\5zbxdefghijklmnopqrstuvwxyz\5\4\3\2\1\0";
+					return true;
+				}}
+			},
+			[s](simple::HttpContext* ctx, const simple::error_code& sys_error_code, int http_status_code, const std::string& body)
+			{
+				*s = body;
+				HttpTest::Info("finish: {}, sys:{}, http:{}, length:{}", ctx->request.url_string(), sys_error_code.value(), http_status_code, body.size());
+			},
+			[](std::shared_ptr<simple::HttpContext> http_ctx)
+			{
+				http_ctx->config.handshake_timeout = 10;
+			}
+		);
+
+		simple::ms::sleep(10 * 1000);
+
+		if (ctx->status.completed)
+		{
+			HttpTest::Info(" {}, total: {} Bytes", abbreviate_middle(*s, 1024 * 2), s->size());
+		}
+	}
+
+
 
 	std::vector<std::string> urls = {
 		"http://bing.com",
@@ -221,18 +254,18 @@ void test_http_async()
 
 	for (auto i = 0; i < urls.size(); i++)
 	{
-		ASYNC::Info("start: {}", urls[i]);
+		HttpTest::Info("start: {}", urls[i]);
 
 		auto ctx = simple::Http::Async::Get(
 			urls[i],
 			[](simple::HttpContext* ctx, uint64_t offset, std::string_view& slice)->bool
 			{
-				ASYNC::Info("slice: {}, offset:{}, slice:{}", ctx->request.url_string(), offset, slice.size());
+				HttpTest::Info("slice: {}, offset:{}, slice:{}", ctx->request.url_string(), offset, slice.size());
 				return true;
 			},
 			[](simple::HttpContext* ctx, const simple::error_code& sys_error_code, int http_status_code, const std::string& body)
 			{
-				ASYNC::Info("finish: {}, sys:{}, http:{}, length:{}", ctx->request.url_string(), sys_error_code.value(), http_status_code, body.size());
+				HttpTest::Info("finish: {}, sys:{}, http:{}, length:{}", ctx->request.url_string(), sys_error_code.value(), http_status_code, body.size());
 			});
 
 		ctxes.emplace_back(ctx);
@@ -245,7 +278,7 @@ void test_http_async()
 		auto ctx = ctxes[i];
 		if (!ctx->status.completed)
 		{
-			ASYNC::Warn("cancel: {}", ctx->request.url_string());
+			HttpTest::Warn("cancel: {}", ctx->request.url_string());
 			ctx->Cancel();
 		}
 			

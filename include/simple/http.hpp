@@ -1920,22 +1920,27 @@ struct Http
             return runtime_manager->execute(http_ctx);
         }
 
-        /*
-        static bool Get(const std::string& url, std::string& out, int64_t timeout_ms)
-        {
-            auto http_ctx = HttpContext::create(url);
-            return Operate(http_ctx, out, timeout_ms);
-        }
 
-        static bool Post(const std::string& url, const std::vector<MultipartBodyItem>& items, std::string& out, int64_t timeout_ms)
+        static std::shared_ptr<HttpContext> Post(const std::string& url, const std::vector<MultipartBodyItem>& items, HttpCallback::OnComplete func_complete, OnContextInitialization func_init = nullptr)
         {
-            auto http_ctx = HttpContext::create("");
+            auto http_ctx = HttpContext::create(
+                "",
+                nullptr,
+                nullptr,
+                func_complete);
+
             http_ctx->init("POST", &url);
             http_ctx->request.post = items;
 
-            return Operate(http_ctx, out, timeout_ms);
+            if (func_init)
+            {
+                func_init(http_ctx);
+            }
+
+            auto http_conn = Operate(http_ctx);
+
+            return http_ctx;
         }
-        */
 
         static std::shared_ptr<HttpContext> Get(const std::string& url, HttpCallback::OnComplete func_complete, OnContextInitialization func_init = nullptr)
         {
