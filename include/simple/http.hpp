@@ -1921,7 +1921,7 @@ struct Http
         }
 
 
-        static std::shared_ptr<HttpContext> Post(const std::string& url, const std::vector<MultipartBodyItem>& items, HttpCallback::OnComplete func_complete, OnContextInitialization func_init = nullptr)
+        static std::shared_ptr<HttpContext> Post(const std::string& url, const std::vector<MultipartBodyItem>& items, const HttpCallback::OnComplete& func_complete, const OnContextInitialization& func_init = nullptr)
         {
             auto http_ctx = HttpContext::create(
                 "",
@@ -1942,7 +1942,7 @@ struct Http
             return http_ctx;
         }
 
-        static std::shared_ptr<HttpContext> Get(const std::string& url, HttpCallback::OnComplete func_complete, OnContextInitialization func_init = nullptr)
+        static std::shared_ptr<HttpContext> Get(const std::string& url, const HttpCallback::OnComplete& func_complete, const OnContextInitialization& func_init = nullptr)
         {
             auto http_ctx = HttpContext::create(
                 url,
@@ -1961,7 +1961,7 @@ struct Http
             return http_ctx;
         }
 
-        static std::shared_ptr<HttpContext> Get(const std::string& url, HttpCallback::OnRecvSlice func_recv_slice, HttpCallback::OnComplete func_complete, OnContextInitialization func_init = nullptr)
+        static std::shared_ptr<HttpContext> Get(const std::string& url, const HttpCallback::OnRecvSlice& func_recv_slice, const HttpCallback::OnComplete& func_complete, const OnContextInitialization& func_init = nullptr)
         {
             auto http_ctx = HttpContext::create(
                 url,
