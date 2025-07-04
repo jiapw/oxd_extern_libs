@@ -10,13 +10,43 @@ const std::string url = "https://video1.2ndu.com/16MB/4x4_0.bin";
 
 LOG_DEFINE(HttpTest);
 
+std::string abbreviate_middle(const std::string& str, std::size_t max_length) {
+	if (str.size() <= max_length || max_length < 5) {
+		return str;
+	}
+
+	std::size_t half = (max_length - 3) / 2;
+	std::size_t right = max_length - 3 - half;
+
+	return str.substr(0, half) + "..." + str.substr(str.size() - right);
+}
+
 void test_http_sync()
 {
 	if(1)
 	{
-		auto r = simple::Http::Sync::Get("https://www.sina.com.cn", 1*50);
+		auto r = simple::Http::Sync::Get("https://www.sina.com.cn");
+
 		if (r)
-			printf("%s\n\n", r->c_str());
+		{
+			HttpTest::Info(" {}, total: {} Bytes", abbreviate_middle(*r, 1024 * 2), r->size());
+		}
+			
+	}
+
+	if (1)
+	{
+		auto r = simple::Http::Sync::Get("https://www.sina.com.cn", -1,
+			[](std::shared_ptr<simple::HttpContext> http_ctx)
+			{
+				http_ctx->config.read_response_body_timeout = 10;
+			}
+		);
+
+		if (r)
+		{
+			HttpTest::Info(" {}, total: {} Bytes", abbreviate_middle(*r, 1024 * 2), r->size());
+		}
 	}
 
 	if(1)
@@ -33,11 +63,12 @@ void test_http_sync()
 					return true;
 				}}
 			}, 
-			s,
-			1*100
+			s
 		);
 		if (b)
-			printf("%s\n\n", s.c_str());
+		{
+			HttpTest::Info(" {}, total: {} Bytes", abbreviate_middle(s, 1024 * 2), s.size());
+		}
 	}
 }
 
@@ -194,6 +225,11 @@ void test_http_async()
 
 		auto ctx = simple::Http::Async::Get(
 			urls[i],
+			[](simple::HttpContext* ctx, uint64_t offset, std::string_view& slice)->bool
+			{
+				ASYNC::Info("slice: {}, offset:{}, slice:{}", ctx->request.url_string(), offset, slice.size());
+				return true;
+			},
 			[](simple::HttpContext* ctx, const simple::error_code& sys_error_code, int http_status_code, const std::string& body)
 			{
 				ASYNC::Info("finish: {}, sys:{}, http:{}, length:{}", ctx->request.url_string(), sys_error_code.value(), http_status_code, body.size());

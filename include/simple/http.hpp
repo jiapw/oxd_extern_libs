@@ -631,6 +631,8 @@ struct HttpContext : public std::enable_shared_from_this<HttpContext>
 
     } response;
 
+    static std::atomic<int> global_count;
+
     HttpContext() = delete;
 
     HttpContext(
@@ -640,6 +642,9 @@ struct HttpContext : public std::enable_shared_from_this<HttpContext>
         const HttpCallback::OnComplete& http_finish_handler
     )
     {
+        int c = ++global_count;
+        SMP_HTTP::Debug("HttpContext() : {}", c);
+
         callback.ctx = this;
         callback.on_recv_header = recv_header_handler;
         callback.on_recv_slice = recv_slice_handler;
@@ -663,6 +668,8 @@ struct HttpContext : public std::enable_shared_from_this<HttpContext>
     }
     ~HttpContext()
     {
+        int c = --global_count;
+        SMP_HTTP::Debug("~HttpContext() : {}", c);
         return;
     }
     bool re_init()
@@ -1441,7 +1448,6 @@ struct HttpConnection : public std::enable_shared_from_this<HttpConnection>
                 location
             );
 
-
             // http 1.1 && same endpoint
             if (status.response_version == 11
                 && http_ctx->request.url.is_same_endpoint(url_b))
@@ -1546,6 +1552,7 @@ struct HttpConnection : public std::enable_shared_from_this<HttpConnection>
 };
 
 inline std::atomic<int> HttpConnection::global_count{ 0 };
+inline std::atomic<int> HttpContext::global_count{ 0 };
 
 struct IOContextWorker : public std::enable_shared_from_this<IOContextWorker>
 {
@@ -1832,13 +1839,15 @@ struct Http
         return __rtm;
     }
 
+    using OnContextInitialization = std::function<void(std::shared_ptr<HttpContext> http_ctx)>;
+
     struct Sync
     {
-        static bool Operate(std::shared_ptr<HttpContext> http_ctx, std::string& out, int64_t timeout_ms)
+        static bool Operate(std::shared_ptr<HttpContext> http_ctx, std::string& out, int64_t timeout_ms = -1)
         {
             std::promise<bool> promise;
             auto future = promise.get_future();
-            
+
             HttpContext::Callback& cbs = http_ctx->callback;
             {
                 cbs.on_complete = [&out, &promise](HttpContext* ctx, const error_code& sys_error_code, int http_status_code, const std::string& body)
@@ -1857,34 +1866,45 @@ struct Http
 
             auto runtime_manager = RTM();
             auto conn = runtime_manager->execute(http_ctx);
-            if (std::future_status::timeout == future.wait_for(std::chrono::milliseconds(timeout_ms)))
+
+            if (timeout_ms >= 0)
             {
-                SMP_HTTP::Warn("Sync::Operate::Timeout!");
-                conn->Cancel();
+                if (std::future_status::timeout == future.wait_for(std::chrono::milliseconds(timeout_ms)))
+                {
+                    SMP_HTTP::Warn("Sync::Operate::Timeout!");
+                    conn->Cancel();
+                }
             }
 
             return future.get();
         }
 
-        static bool Get(const std::string& url, std::string& out, int64_t timeout_ms)
+        static bool Get(const std::string& url, std::string& out, int64_t timeout_ms = -1, OnContextInitialization func_init = nullptr)
         {
             auto http_ctx = HttpContext::create(url);
+            if (func_init)
+            {
+                func_init(http_ctx);
+            }
             return Operate(http_ctx, out, timeout_ms);
         }
 
-        static bool Post(const std::string& url, const std::vector<MultipartBodyItem>& items, std::string& out, int64_t timeout_ms)
+        static bool Post(const std::string& url, const std::vector<MultipartBodyItem>& items, std::string& out, int64_t timeout_ms = -1, OnContextInitialization func_init = nullptr)
         {
             auto http_ctx = HttpContext::create("");
             http_ctx->init("POST", &url);
             http_ctx->request.post = items;
-
+            if (func_init)
+            {
+                func_init(http_ctx);
+            }
             return Operate(http_ctx, out, timeout_ms);
         }
 
-        static std::optional<std::string> Get(const std::string& url, int64_t timeout_ms)
+        static std::optional<std::string> Get(const std::string& url, int64_t timeout_ms = -1, OnContextInitialization func_init = nullptr)
         {
             std::string res;
-            if (Get(url, res, timeout_ms))
+            if (Get(url, res, timeout_ms, func_init))
                 return std::optional<std::string>(std::move(res));
             else
                 return std::nullopt;
@@ -1917,14 +1937,38 @@ struct Http
         }
         */
 
-        static std::shared_ptr<HttpContext> Get(const std::string& url, HttpCallback::OnComplete func)
+        static std::shared_ptr<HttpContext> Get(const std::string& url, HttpCallback::OnComplete func_complete, OnContextInitialization func_init = nullptr)
         {
             auto http_ctx = HttpContext::create(
                 url,
                 nullptr,
                 nullptr,
-                func
+                func_complete
                 );
+
+            if (func_init)
+            {
+                func_init(http_ctx);
+            }
+
+            auto http_conn = Operate(http_ctx);
+
+            return http_ctx;
+        }
+
+        static std::shared_ptr<HttpContext> Get(const std::string& url, HttpCallback::OnRecvSlice func_recv_slice, HttpCallback::OnComplete func_complete, OnContextInitialization func_init = nullptr)
+        {
+            auto http_ctx = HttpContext::create(
+                url,
+                nullptr,
+                func_recv_slice,
+                func_complete
+            );
+
+            if (func_init)
+            {
+                func_init(http_ctx);
+            }
 
             auto http_conn = Operate(http_ctx);
 
