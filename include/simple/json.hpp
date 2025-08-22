@@ -103,7 +103,7 @@ namespace simple {
 			else if constexpr (std::is_same_v<T, float>
 				|| std::is_same_v<T, double>)
 			{
-				if (!v.is_number_float())
+				if (!v.is_number())
 					return false;
 			}
 			else if constexpr (std::is_same_v<T, nlohmann::json> || std::is_same_v<T, json>)
