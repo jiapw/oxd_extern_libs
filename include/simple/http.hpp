@@ -547,7 +547,17 @@ struct HttpContext : public std::enable_shared_from_this<HttpContext>
         int         redirect_limit = 1;             // the number of http redirects allowed
         int         log_slice_interval_ms = 100;    // less than 0: never;     equal to 0: always;
         
-        
+        void generic()
+        {
+            resolve_timeout = 8 * 1000;
+            connect_timeout = 10 * 1000;
+            handshake_timeout = 8 * 1000;
+            write_timeout = 10 * 1000;
+            read_response_header_timeout = 10 * 1000;
+            read_response_body_timeout = 30 * 1000;
+            read_response_chunk_timeout = 5 * 1000;
+        }
+
     } config;
 
     struct
@@ -644,6 +654,8 @@ struct HttpContext : public std::enable_shared_from_this<HttpContext>
     {
         int c = ++global_count;
         SMP_HTTP::Debug("HttpContext() : {}", c);
+
+        config.generic();
 
         callback.ctx = this;
         callback.on_recv_header = recv_header_handler;
@@ -1556,9 +1568,17 @@ inline std::atomic<int> HttpContext::global_count{ 0 };
 
 struct IOContextWorker : public std::enable_shared_from_this<IOContextWorker>
 {
-    asio::io_context& io_ctx;
-    boost::asio::executor_work_guard<boost::asio::io_context::executor_type> work_guard;
-    std::thread thread;
+protected:
+    std::atomic<bool> ready{ false };
+    bool is_ready() const
+    {
+        return ready.load(std::memory_order_acquire);
+    }
+    void mark_ready()
+    {
+        ready.store(true, std::memory_order_release);
+    }
+
     enum class st
     {
         init = 0,
@@ -1566,18 +1586,25 @@ struct IOContextWorker : public std::enable_shared_from_this<IOContextWorker>
         stop
     };
     volatile st thread_state = st::init;
+
+    asio::io_context& io_ctx;
+    boost::asio::executor_work_guard<boost::asio::io_context::executor_type> work_guard;
+    std::thread thread;
+
     IOContextWorker(asio::io_context& io_c)
         : io_ctx(io_c)
         , work_guard(boost::asio::make_work_guard(io_c))
         , thread(&IOContextWorker::thread_func, this)
     {
     }
-    bool is_running()
-    {
-        return thread_state == st::start;
-    }
+
     void thread_func()
     {
+        while (!is_ready())
+        {
+            std::this_thread::yield();
+        }
+
         SMP_HTTP::Debug("IOContextWorker start");
         thread_state = st::start;
 
@@ -1586,6 +1613,16 @@ struct IOContextWorker : public std::enable_shared_from_this<IOContextWorker>
 
         thread_state = st::stop;
         SMP_HTTP::Debug("IOContextWorker stop");
+    }
+
+public:
+    std::thread::id thread_id()
+    {
+        return thread.get_id();
+    }
+    bool is_running()
+    {
+        return thread_state == st::start;
     }
     void stop()
     {
@@ -1615,7 +1652,9 @@ struct IOContextWorker : public std::enable_shared_from_this<IOContextWorker>
     }
     static std::shared_ptr<IOContextWorker> Create(asio::io_context& io_c)
     {
-        return std::make_shared<IOContextWorker>(io_c);
+        auto r = new IOContextWorker(io_c);
+        r->mark_ready();
+        return std::shared_ptr<IOContextWorker>(r);
     }
 };
 
@@ -1643,7 +1682,7 @@ struct HttpManager : public std::enable_shared_from_this<HttpManager>
 
     void start_work_thread()
     {
-        worker = std::make_shared<IOContextWorker>(io_ctx);
+        worker = IOContextWorker::Create(io_ctx);
     };
 
     void stop_work_thread()
@@ -1661,7 +1700,7 @@ struct HttpManager : public std::enable_shared_from_this<HttpManager>
     {
         assert(worker);
         assert(worker->is_running());
-        return (std::this_thread::get_id() == worker->thread.get_id());
+        return (std::this_thread::get_id() == worker->thread_id());
     }
 
     bool is_working()
