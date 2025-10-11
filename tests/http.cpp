@@ -131,7 +131,7 @@ void test_http_manager()
 				nullptr,
 #endif
 
-				[](const simple::HttpContext* ctx, const simple::error_code& sys_error_code, int http_status_code, const std::string& body)->void
+				[](const simple::HttpContext* ctx, const std::error_code& sys_error_code, int http_status_code, const std::string& body)->void
 				{
 					auto recv_size = body.size() ? body.size() : ctx->response.slice_recv_bytes;
 					if (simple::is_http_status_2xx(http_status_code))
@@ -184,7 +184,7 @@ void test_http_error_code()
 				"http://www.baidu.com",
 				nullptr,
 				nullptr,
-				[](simple::HttpContext* ctx, const simple::error_code& sys_error_code, int http_status_code, const std::string& body) 
+				[](simple::HttpContext* ctx, const std::error_code& sys_error_code, int http_status_code, const std::string& body) 
 				{
 					THEC::Info("http error code:{}", http_status_code);
 				}
@@ -220,7 +220,7 @@ void test_http_async()
 					return true;
 				}}
 			},
-			[s](simple::HttpContext* ctx, const simple::error_code& sys_error_code, int http_status_code, const std::string& body)
+			[s](simple::HttpContext* ctx, const std::error_code& sys_error_code, int http_status_code, const std::string& body)
 			{
 				*s = body;
 				HttpTest::Info("finish: {}, sys:{}, http:{}, length:{}", ctx->request.url_string(), sys_error_code.value(), http_status_code, body.size());
@@ -263,7 +263,7 @@ void test_http_async()
 				HttpTest::Info("slice: {}, offset:{}, slice:{}", ctx->request.url_string(), offset, slice.size());
 				return true;
 			},
-			[](simple::HttpContext* ctx, const simple::error_code& sys_error_code, int http_status_code, const std::string& body)
+			[](simple::HttpContext* ctx, const std::error_code& sys_error_code, int http_status_code, const std::string& body)
 			{
 				HttpTest::Info("finish: {}, sys:{}, http:{}, length:{}", ctx->request.url_string(), sys_error_code.value(), http_status_code, body.size());
 			});

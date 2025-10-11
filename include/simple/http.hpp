@@ -23,11 +23,10 @@
 #include "log.hpp"
 #include "time.hpp"
 
-
-namespace simple
-{
+#include "errc.hpp"
 
 #define HTTP_ERROR_LIST(XX) \
+    XX(SUCCESS,                         0x0000, "Success") \
     XX(INVALID_URL,                     0x1001, "Invalid URL") \
     XX(INVALID_REQUEST,                 0x1002, "Invalid request") \
     XX(INVALID_STATUS,                  0x1003, "Invalid status") \
@@ -50,74 +49,7 @@ namespace simple
     XX(BLOCKED_BY_FAILURE_CACHE,        0x4002, "Blocked due to failure cache") \
     XX(CANCELED_BY_USER,                0x5001, "Canceled by user")
 
-enum class HttpError
-{
-#define NAME_VALUE(name, value, str) name = value,
-    HTTP_ERROR_LIST(NAME_VALUE)
-#undef NAME_VALUE
-};
-
-inline const char* HttpErrorString(HttpError code)
-{
-    switch (code) {
-#define CASE_NAME_RETURN_STRING(name, value, str) case HttpError::name: return str;
-        HTTP_ERROR_LIST(CASE_NAME_RETURN_STRING)
-#undef CASE_NAME_RETURN_STRING
-    default: return "Unknown HTTP error";
-    }
-}
-
-class HttpErrorCategory : public boost::system::error_category
-{
-public:
-    const char* name() const noexcept override 
-    {
-        return "simple::HttpErrorCategory";
-    }
-
-    std::string message(int ev) const override 
-    {
-        return HttpErrorString(static_cast<HttpError>(ev));
-    }
-
-    inline static const boost::system::error_category& http_error_category() 
-    {
-        static HttpErrorCategory instance;
-        return instance;
-    }
-
-    inline static boost::system::error_code make_error_code(HttpError e)
-    {
-        return { static_cast<int>(e), http_error_category() };
-    }
-};
-
-inline boost::system::error_code make_error_code(HttpError e) 
-{
-    return HttpErrorCategory::make_error_code(e);
-}
-
-} // namespace simple
-
-namespace boost::system
-{
-    template <>
-    struct is_error_code_enum<simple::HttpError> : std::true_type {};
-}
-
-namespace simple
-{
-    using error_code = boost::system::error_code;
-
-    // define SUCCESS to represent no error
-    const error_code SUCCESS = error_code();
-
-    // declare all HttpError
-#define DECALRE_CONST(name, value, str) const error_code name = HttpError::name;
-    HTTP_ERROR_LIST(DECALRE_CONST)
-#undef DECALRE_CONST
-
-} // namespace simple
+REGISTER_ERROR_LIST(HttpError, HTTP_ERROR_LIST, simple)
 
 namespace simple
 {
@@ -463,7 +395,7 @@ struct HttpCallback
 {
     using OnRecvHeader  = std::function<bool(HttpContext* ctx, int http_status_code)>; // if you want to end the request, return false
     using OnRecvSlice   = std::function<bool(HttpContext* ctx, uint64_t offset, std::string_view& slice)>; // if you want to end the request, return false
-    using OnComplete    = std::function<void(HttpContext* ctx, const error_code& sys_error_code, int http_status_code, const std::string& body)>;
+    using OnComplete    = std::function<void(HttpContext* ctx, const std::error_code& sys_error_code, int http_status_code, const std::string& body)>;
     using OnDataNeeded  = std::function<bool(std::string& buf)>;
     using OnTimer       = std::function<void(const boost::system::error_code& ec)>;
 };
@@ -523,7 +455,7 @@ struct HttpContext : public std::enable_shared_from_this<HttpContext>
             else
                 return false;
         }
-        void http_complete(const error_code& sys_error_code, int http_status_code, const std::string& body)
+        void http_complete(const std::error_code& sys_error_code, int http_status_code, const std::string& body)
         {
             if (on_complete)
                 on_complete(ctx, sys_error_code, http_status_code, body);
@@ -716,7 +648,7 @@ struct HttpContext : public std::enable_shared_from_this<HttpContext>
                 SMP_HTTP::Warn(
                     "failed in parse url: \"{}\", caused by: {}",
                     *url,
-                    INVALID_URL.message()
+                    make_error_code(HttpError::INVALID_URL)
                 );
                 return false;
             }
@@ -819,7 +751,7 @@ struct HttpContext : public std::enable_shared_from_this<HttpContext>
         if (auto& last_error = status.sys_error_code)
             callback.http_complete(last_error, 0, "");
         else
-            callback.http_complete(SUCCESS, response_status_code(), response_body());
+            callback.http_complete(HttpError::SUCCESS, response_status_code(), response_body());
     }
 
     template<class T>
@@ -980,12 +912,12 @@ struct HttpConnection : public std::enable_shared_from_this<HttpConnection>
         bind(ctx);
 
         if (http_ctx->is_completed())
-            return finish_in_failure(INVALID_REQUEST, "HttpConnection::execute");
+            return finish_in_failure(HttpError::INVALID_REQUEST, "HttpConnection::execute");
 
         if (ctx->request.method == "GET") // only block get
         {
             if (HttpResultCache::IsFreezed(ctx->request.url_string()))
-                return finish_in_failure(BLOCKED_BY_FAILURE_CACHE, "HttpConnection::execute");
+                return finish_in_failure(HttpError::BLOCKED_BY_FAILURE_CACHE, "HttpConnection::execute");
         }
 
         SMP_HTTP::Trace(
@@ -1051,13 +983,13 @@ struct HttpConnection : public std::enable_shared_from_this<HttpConnection>
             );
 
             if (ec == asio::error::operation_aborted)
-                return finish_in_failure(TIMEOUT_RESOLVE, "resolve");
+                return finish_in_failure(HttpError::TIMEOUT_RESOLVE, "resolve");
             else
                 return finish_in_failure(ec, "resolve");
         }
 
         if (canceled_by_user)
-            return finish_in_failure(CANCELED_BY_USER, "resolve");
+            return finish_in_failure(HttpError::CANCELED_BY_USER, "resolve");
 
         SMP_HTTP::Trace(
             "{} resolve {}, result: [{}]", 
@@ -1101,7 +1033,7 @@ struct HttpConnection : public std::enable_shared_from_this<HttpConnection>
         }
 
         if (canceled_by_user)
-            return finish_in_failure(CANCELED_BY_USER, "connect");
+            return finish_in_failure(HttpError::CANCELED_BY_USER, "connect");
 
         SMP_HTTP::Trace(
             "{} connected: {}:{}",
@@ -1151,7 +1083,7 @@ struct HttpConnection : public std::enable_shared_from_this<HttpConnection>
         }
 
         if (canceled_by_user)
-            return finish_in_failure(CANCELED_BY_USER, "handshake");
+            return finish_in_failure(HttpError::CANCELED_BY_USER, "handshake");
 
         if (http_ctx->request.method == "POST")
         {
@@ -1268,7 +1200,7 @@ struct HttpConnection : public std::enable_shared_from_this<HttpConnection>
         }
 
         if (canceled_by_user)
-            return finish_in_failure(CANCELED_BY_USER, "write request");
+            return finish_in_failure(HttpError::CANCELED_BY_USER, "write request");
 
         SMP_HTTP::Trace(
             "{} send request: {} bytes, finished: {}%",
@@ -1350,11 +1282,11 @@ struct HttpConnection : public std::enable_shared_from_this<HttpConnection>
         }
 
         if (canceled_by_user)
-            return finish_in_failure(CANCELED_BY_USER, "read response header");
+            return finish_in_failure(HttpError::CANCELED_BY_USER, "read response header");
 
         if (!http_ctx->on_recv_header())
         {
-            return finish_in_failure(FAILED_BY_UPPER_LAYER, "read response header");
+            return finish_in_failure(HttpError::FAILED_BY_UPPER_LAYER, "read response header");
         }
 
         if (http_ctx->is_slice_mode())
@@ -1417,7 +1349,7 @@ struct HttpConnection : public std::enable_shared_from_this<HttpConnection>
             return finish_in_failure(ec, "read response body");
 
         if (canceled_by_user)
-            return finish_in_failure(CANCELED_BY_USER, "read response body");
+            return finish_in_failure(HttpError::CANCELED_BY_USER, "read response body");
 
         SMP_HTTP::Trace("{} completed request: {} {} => [{}] {} Bytes",
             this->to_string(),
@@ -1435,7 +1367,7 @@ struct HttpConnection : public std::enable_shared_from_this<HttpConnection>
         auto& status = http_ctx->status;
 
         if (status.http_status_code == 0)
-            return finish_in_failure(INVALID_STATUS, "handle_response_finish without http_status_code");
+            return finish_in_failure(HttpError::INVALID_STATUS, "handle_response_finish without http_status_code");
 
         // 2xx
         if (is_http_status_2xx(status.http_status_code))
@@ -1445,14 +1377,14 @@ struct HttpConnection : public std::enable_shared_from_this<HttpConnection>
         if (is_http_status_3xx(status.http_status_code))
         {
             if (status.redirect_count > http_ctx->config.redirect_limit)
-                return finish_in_failure(FAILED_REDIRECT_COUNT, "redirect too many times");
+                return finish_in_failure(HttpError::FAILED_REDIRECT_COUNT, "redirect too many times");
 
             status.redirect_count++;
 
             std::string location = http_ctx->response_location();
             Url url_b;
             if (!url_b.set(location))
-                return finish_in_failure(FAILED_REDIRECT_LOCATION, "redirect location invalid");
+                return finish_in_failure(HttpError::FAILED_REDIRECT_LOCATION, "redirect location invalid");
 
             SMP_HTTP::Trace("{} redirect: {} => {}",
                 this->to_string(),
@@ -1466,7 +1398,7 @@ struct HttpConnection : public std::enable_shared_from_this<HttpConnection>
             {
                 // reuse connection, send new HTTP request
                 http_ctx->re_init(location);
-                on_handshake(error_code());
+                on_handshake(HttpError::SUCCESS);
             }
             else
             {
@@ -1549,11 +1481,11 @@ struct HttpConnection : public std::enable_shared_from_this<HttpConnection>
         }
 
         if (canceled_by_user)
-            return finish_in_failure(CANCELED_BY_USER, "read response slice");
+            return finish_in_failure(HttpError::CANCELED_BY_USER, "read response slice");
 
         if (!http_ctx->on_recv_slice())
         {
-            return finish_in_failure(FAILED_BY_UPPER_LAYER, "read response slice");
+            return finish_in_failure(HttpError::FAILED_BY_UPPER_LAYER, "read response slice");
         }
 
         if (http_ctx->response.buffer_body->is_done())
@@ -1791,12 +1723,12 @@ struct HttpManager : public std::enable_shared_from_this<HttpManager>
         );
 
         auto origin_on_complete = http_ctx->callback.on_complete;
-        http_ctx->callback.on_complete = [this, http_conn, origin_on_complete](HttpContext* ctx, const error_code& sys_error_code, int http_status_code, const std::string& body)
+        http_ctx->callback.on_complete = [this, http_conn, origin_on_complete](HttpContext* ctx, const std::error_code& sys_error_code, int http_status_code, const std::string& body)
             {
                 SMP_HTTP::Debug("HttpManager => ({}) Finished:{}, error:{}, http:{}, content:{}",
                     http_conn->to_string(),
                     ctx->request.url_string(),
-                    sys_error_code.to_string(),
+                    sys_error_code,
                     http_status_code, 
                     ctx->response.content_length
                 );
@@ -1889,9 +1821,9 @@ struct Http
 
             HttpContext::Callback& cbs = http_ctx->callback;
             {
-                cbs.on_complete = [&out, &promise](HttpContext* ctx, const error_code& sys_error_code, int http_status_code, const std::string& body)
+                cbs.on_complete = [&out, &promise](HttpContext* ctx, const std::error_code& sys_error_code, int http_status_code, const std::string& body)
                     {
-                        if (!sys_error_code.failed() && http_status_code == 200)
+                        if (!sys_error_code && http_status_code == 200)
                         {
                             out = body;
                             promise.set_value(true);
