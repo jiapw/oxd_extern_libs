@@ -766,9 +766,19 @@ struct HttpContext : public std::enable_shared_from_this<HttpContext>
     bool on_recv_header()
     {
         if (is_slice_mode())
-            process_http_header(response.buffer_body);
+        {
+            if (response.buffer_body->is_header_done())
+                process_http_header(response.buffer_body);
+            else
+                return false;
+        }
         else
-            process_http_header(response.string_body);
+        {
+            if (response.string_body->is_header_done())
+                process_http_header(response.string_body);
+            else
+                return false;
+        }
 
         HttpResultCache::ReportResult(request.url_string(), status.http_status_code);
 
