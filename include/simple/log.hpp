@@ -383,10 +383,10 @@ struct Logger
 
         auto obj = SingleInstance();
         obj->sinks().push_back(sink);
-        Info(
-            file_path.empty() ? "add auto-named file sink : {}" : "add specific file sink : {}",
-            sink->filename()
-        );
+        if (file_path.empty())
+            Info("add auto-named file sink : {}", sink->filename());
+        else
+            Info("add specific file sink : {}", sink->filename());
     }
 
     static void UdpSink(const std::string_view host, const uint16_t port)

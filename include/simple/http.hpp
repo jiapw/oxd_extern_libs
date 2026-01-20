@@ -134,7 +134,7 @@ struct fmt::formatter<boost::asio::ip::basic_resolver_iterator<boost::asio::ip::
     {
         const auto& ep = A.endpoint();
         //return format_to(ctx.out(), "{}->{}", A.host_name(), ep.address().to_string());
-        return format_to(ctx.out(), "{}", ep.address().to_string());
+        return fmt::format_to(ctx.out(), "{}", ep.address().to_string());
     }
 };
 
